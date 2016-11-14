@@ -24,10 +24,11 @@
 #ifndef LISTMODEL_H
 #define LISTMODEL_H
 
-#include <QAbstractListModel>
+#include <QAbstractItemModel>
 #include <QMap>
 
 namespace Zeal {
+namespace Registry {
 
 class Docset;
 class DocsetRegistry;
@@ -36,12 +37,6 @@ class ListModel : public QAbstractItemModel
 {
     Q_OBJECT
 public:
-    enum ItemDataRole {
-        // Do not collide with SearchModel, and ProgressItemDelegate.
-        DocsetNameRole = Qt::UserRole + 20,
-        UpdateAvailableRole
-    };
-
     explicit ListModel(DocsetRegistry *docsetRegistry, QObject *parent = nullptr);
     ~ListModel() override;
 
@@ -84,6 +79,7 @@ private:
     QMap<QString, DocsetItem *> m_docsetItems;
 };
 
+} // namespace Registry
 } // namespace Zeal
 
 #endif // LISTMODEL_H

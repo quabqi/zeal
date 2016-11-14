@@ -24,9 +24,9 @@
 #include "docsetregistry.h"
 
 #include "cancellationtoken.h"
+#include "searchquery.h"
 #include "searchresult.h"
 
-#include <QDebug>
 #include <QDir>
 #include <QThread>
 
@@ -34,7 +34,7 @@
 
 #include <functional>
 
-using namespace Zeal;
+using namespace Zeal::Registry;
 
 void MergeQueryResults(QList<SearchResult> &finalResult, const QList<SearchResult> &partial)
 {
@@ -47,7 +47,7 @@ DocsetRegistry::DocsetRegistry(QObject *parent) :
 {
     // Register for use in signal connections.
     qRegisterMetaType<CancellationToken>("CancellationToken");
-    qRegisterMetaType<QList<Zeal::SearchResult>>("QList<SearchResult>");
+    qRegisterMetaType<QList<SearchResult>>("QList<SearchResult>");
 
     // FIXME: Only search should be performed in a separate thread
     moveToThread(m_thread);
@@ -142,11 +142,23 @@ void DocsetRegistry::search(const QString &query, const CancellationToken &token
 
 void DocsetRegistry::_runQuery(const QString &query, const CancellationToken &token)
 {
+    QList<Docset *> enabledDocsets;
+
+    const SearchQuery searchQuery = SearchQuery::fromString(query);
+    if (searchQuery.hasKeywords()) {
+        for (Docset *docset : docsets()) {
+            if (searchQuery.hasKeywords(docset->keywords()))
+                enabledDocsets << docset;
+        }
+    } else {
+        enabledDocsets = docsets();
+    }
+
     QFuture<QList<SearchResult>> queryResultsFuture
-            = QtConcurrent::mappedReduced(docsets(),
+            = QtConcurrent::mappedReduced(enabledDocsets,
                                           std::bind(&Docset::search,
                                                     std::placeholders::_1,
-                                                    query, token),
+                                                    searchQuery.query(), token),
                                           &MergeQueryResults);
     QList<SearchResult> results = queryResultsFuture.result();
 

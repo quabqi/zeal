@@ -24,22 +24,22 @@
 #include "docset.h"
 
 #include "cancellationtoken.h"
-#include "searchquery.h"
 #include "searchresult.h"
 
 #include <util/plist.h>
+#include <util/sqlitedatabase.h>
 
 #include <QDir>
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QSqlDatabase>
-#include <QSqlError>
-#include <QSqlQuery>
-#include <QUrl>
+#include <QRegularExpression>
 #include <QVariant>
 
-using namespace Zeal;
+#include <sqlite3.h>
+
+static void scoreFunc(sqlite3_context *context, int, sqlite3_value **argv);
+using namespace Zeal::Registry;
 
 namespace {
 const char IndexNamePrefix[] = "__zi_name"; // zi - Zeal index
@@ -47,14 +47,14 @@ const char IndexNameVersion[] = "0001"; // Current index version
 
 namespace InfoPlist {
 const char CFBundleName[] = "CFBundleName";
-const char CFBundleIdentifier[] = "CFBundleIdentifier";
+//const char CFBundleIdentifier[] = "CFBundleIdentifier";
 const char DashDocSetFamily[] = "DashDocSetFamily";
 const char DashDocSetKeyword[] = "DashDocSetKeyword";
 const char DashDocSetPluginKeyword[] = "DashDocSetPluginKeyword";
 const char DashIndexFilePath[] = "dashIndexFilePath";
 const char DocSetPlatformFamily[] = "DocSetPlatformFamily";
-const char IsDashDocset[] = "isDashDocset";
-const char IsJavaScriptEnabled[] = "isJavaScriptEnabled";
+//const char IsDashDocset[] = "isDashDocset";
+//const char IsJavaScriptEnabled[] = "isJavaScriptEnabled";
 }
 }
 
@@ -117,15 +117,17 @@ Docset::Docset(const QString &path) :
     if (!dir.cd(QStringLiteral("Resources")) || !dir.exists(QStringLiteral("docSet.dsidx")))
         return;
 
-    QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), m_name);
-    db.setDatabaseName(dir.absoluteFilePath(QStringLiteral("docSet.dsidx")));
+    m_db = new Util::SQLiteDatabase(dir.absoluteFilePath(QStringLiteral("docSet.dsidx")));
 
-    if (!db.open()) {
-        qWarning("SQL Error: %s", qPrintable(db.lastError().text()));
+    if (!m_db->isOpen()) {
+        qWarning("SQL Error: %s", qPrintable(m_db->lastError()));
         return;
     }
 
-    m_type = db.tables().contains(QStringLiteral("searchIndex")) ? Type::Dash : Type::ZDash;
+    sqlite3_create_function(m_db->handle(), "zealScore", 2, SQLITE_UTF8, nullptr, scoreFunc,
+                            nullptr, nullptr);
+
+    m_type = m_db->tables().contains(QStringLiteral("searchIndex")) ? Type::Dash : Type::ZDash;
 
     createIndex();
 
@@ -146,21 +148,18 @@ Docset::Docset(const QString &path) :
 
     if (plist.contains(InfoPlist::DashDocSetFamily)) {
         const QString kw = plist[InfoPlist::DashDocSetFamily].toString();
-        if (kw != QLatin1String("dashtoc"))
+        if (kw != QLatin1String("dashtoc") && kw != QLatin1String("unsorteddashtoc"))
             m_keywords << kw;
     }
 
-    // TODO: Use 'unknown' instead of CFBundleName? (See #383)
-    m_keywords << plist.value(InfoPlist::CFBundleName, m_name).toString().toLower();
-
     m_keywords.removeDuplicates();
 
-    // Try to find index path if metadata is missing one
-    if (m_indexFilePath.isEmpty()) {
-        if (plist.contains(InfoPlist::DashIndexFilePath))
-            m_indexFilePath = plist[InfoPlist::DashIndexFilePath].toString();
-        else if (dir.exists(QStringLiteral("index.html")))
-            m_indexFilePath = QStringLiteral("index.html");
+    // Prefer index path provided by the docset over metadata.
+    if (plist.contains(InfoPlist::DashIndexFilePath)) {
+        m_indexFileUrl = createPageUrl(plist[InfoPlist::DashIndexFilePath].toString());
+    } else if (m_indexFileUrl.isEmpty()) {
+        if (dir.exists(QStringLiteral("index.html")))
+            m_indexFileUrl = createPageUrl(QStringLiteral("index.html"));
         else
             qWarning("Cannot determine index file for docset %s", qPrintable(m_name));
     }
@@ -170,7 +169,7 @@ Docset::Docset(const QString &path) :
 
 Docset::~Docset()
 {
-    QSqlDatabase::removeDatabase(m_name);
+    delete m_db;
 }
 
 bool Docset::isValid() const
@@ -226,9 +225,9 @@ QIcon Docset::symbolTypeIcon(const QString &symbolType) const
     return icon.availableSizes().isEmpty() ? unknownIcon : icon;
 }
 
-QString Docset::indexFilePath() const
+QUrl Docset::indexFileUrl() const
 {
-    return QDir(documentPath()).absoluteFilePath(m_indexFilePath);
+    return m_indexFileUrl;
 }
 
 QMap<QString, int> Docset::symbolCounts() const
@@ -241,7 +240,7 @@ int Docset::symbolCount(const QString &symbolType) const
     return m_symbolCounts.value(symbolType);
 }
 
-const QMap<QString, QString> &Docset::symbols(const QString &symbolType) const
+const QMap<QString, QUrl> &Docset::symbols(const QString &symbolType) const
 {
     if (!m_symbols.contains(symbolType))
         loadSymbols(symbolType);
@@ -250,74 +249,46 @@ const QMap<QString, QString> &Docset::symbols(const QString &symbolType) const
 
 QList<SearchResult> Docset::search(const QString &query, const CancellationToken &token) const
 {
-    QList<SearchResult> results;
-
-    const SearchQuery searchQuery = SearchQuery::fromString(query);
-    const QString sanitizedQuery = searchQuery.sanitizedQuery();
-
-    if (searchQuery.hasKeywords() && !searchQuery.hasKeywords(m_keywords))
-        return results;
+    // Make it safe to use in a SQL query.
+    QString sanitizedQuery = query;
+    sanitizedQuery.replace(QLatin1String("\\"), QLatin1String("\\\\"));
+    sanitizedQuery.replace(QLatin1String("_"), QLatin1String("\\_"));
+    sanitizedQuery.replace(QLatin1String("%"), QLatin1String("\\%"));
+    sanitizedQuery.replace(QLatin1String("'"), QLatin1String("''"));
 
     QString queryStr;
+    if (m_type == Docset::Type::Dash) {
+        queryStr = QStringLiteral("SELECT name, type, path, '', zealScore('%1', name) as score "
+                                  "    FROM searchIndex "
+                                  "WHERE score > 0 "
+                                  "ORDER BY score DESC").arg(sanitizedQuery);
+    } else {
+        queryStr = QStringLiteral("SELECT ztokenname, ztypename, zpath, zanchor, zealScore('%1', ztokenname) as score "
+                                  "    FROM ztoken "
+                                  "LEFT JOIN ztokenmetainformation "
+                                  "    ON ztoken.zmetainformation = ztokenmetainformation.z_pk "
+                                  "LEFT JOIN zfilepath "
+                                  "    ON ztokenmetainformation.zfile = zfilepath.z_pk "
+                                  "LEFT JOIN ztokentype "
+                                  "    ON ztoken.ztokentype = ztokentype.z_pk "
+                                  "WHERE score > 0 "
+                                  "ORDER BY score DESC").arg(sanitizedQuery);
+    }
 
-    bool withSubStrings = false;
-    // %.%1% for long Django docset values like django.utils.http
-    // %::%1% for long C++ docset values like std::set
-    // %/%1% for long Go docset values like archive/tar
-    QString subNames = QStringLiteral(" OR %1 LIKE '%.%2%' ESCAPE '\\'");
-    subNames += QLatin1String(" OR %1 LIKE '%::%2%' ESCAPE '\\'");
-    subNames += QLatin1String(" OR %1 LIKE '%/%2%' ESCAPE '\\'");
-    while (!token.isCanceled() && results.size() < 100) {
-        QString curQuery = sanitizedQuery;
-        QString notQuery; // don't return the same result twice
-        if (withSubStrings) {
-            // if less than 100 found starting with query, search all substrings
-            curQuery = QLatin1Char('%') + sanitizedQuery;
-            // don't return 'starting with' results twice
-            if (m_type == Docset::Type::Dash)
-                notQuery = QString(" AND NOT (name LIKE '%1%' ESCAPE '\\' %2) ").arg(sanitizedQuery, subNames.arg("name", sanitizedQuery));
-            else
-                notQuery = QString(" AND NOT (ztokenname LIKE '%1%' ESCAPE '\\' %2) ").arg(sanitizedQuery, subNames.arg("ztokenname", sanitizedQuery));
-        }
-        if (m_type == Docset::Type::Dash) {
-            queryStr = QString("SELECT name, type, path "
-                               "    FROM searchIndex "
-                               "WHERE (name LIKE '%1%' ESCAPE '\\' %3) %2 "
-                               "ORDER BY name COLLATE NOCASE LIMIT 100")
-                    .arg(curQuery, notQuery, subNames.arg("name", curQuery));
-        } else {
-            queryStr = QString("SELECT ztokenname, ztypename, zpath, zanchor "
-                               "    FROM ztoken "
-                               "JOIN ztokenmetainformation "
-                               "    ON ztoken.zmetainformation = ztokenmetainformation.z_pk "
-                               "JOIN zfilepath "
-                               "    ON ztokenmetainformation.zfile = zfilepath.z_pk "
-                               "JOIN ztokentype "
-                               "    ON ztoken.ztokentype = ztokentype.z_pk "
-                               "WHERE (ztokenname LIKE '%1%' ESCAPE '\\' %3) %2 "
-                               "ORDER BY ztokenname COLLATE NOCASE LIMIT 100")
-                    .arg(curQuery, notQuery, subNames.arg("ztokenname", curQuery));
-        }
+    // Limit for very short queries.
+    // TODO: Show a notification about the reduced result set.
+    if (query.size() < 3)
+        queryStr += QLatin1String(" LIMIT 1000");
 
-        QSqlQuery query(queryStr, database());
-        while (query.next()) {
-            const QString itemName = query.value(0).toString();
-            QString path = query.value(2).toString();
-            if (m_type == Docset::Type::ZDash) {
-                const QString anchor = query.value(3).toString();
-                if (!anchor.isEmpty())
-                    path += QLatin1Char('#') + anchor;
-            }
+    QList<SearchResult> results;
 
-            // TODO: Third should be type
-            results.append(SearchResult{itemName, QString(),
-                                        parseSymbolType(query.value(1).toString()),
-                                        const_cast<Docset *>(this), path, sanitizedQuery});
-        }
-
-        if (withSubStrings)
-            break;
-        withSubStrings = true;  // try again searching for substrings
+    m_db->execute(queryStr);
+    while (m_db->next() && !token.isCanceled()) {
+        results.append({m_db->value(0).toString(),
+                        parseSymbolType(m_db->value(1).toString()),
+                        const_cast<Docset *>(this),
+                        createPageUrl(m_db->value(2).toString(), m_db->value(3).toString()),
+                        m_db->value(4).toInt()});
     }
 
     return results;
@@ -345,36 +316,25 @@ QList<SearchResult> Docset::relatedLinks(const QUrl &url) const
     } else if (m_type == Docset::Type::ZDash) {
         queryStr = QStringLiteral("SELECT ztoken.ztokenname, ztokentype.ztypename, zfilepath.zpath, ztokenmetainformation.zanchor "
                                   "FROM ztoken "
-                                  "JOIN ztokenmetainformation ON ztoken.zmetainformation = ztokenmetainformation.z_pk "
-                                  "JOIN zfilepath ON ztokenmetainformation.zfile = zfilepath.z_pk "
-                                  "JOIN ztokentype ON ztoken.ztokentype = ztokentype.z_pk "
+                                  "LEFT JOIN ztokenmetainformation ON ztoken.zmetainformation = ztokenmetainformation.z_pk "
+                                  "LEFT JOIN zfilepath ON ztokenmetainformation.zfile = zfilepath.z_pk "
+                                  "LEFT JOIN ztokentype ON ztoken.ztokentype = ztokentype.z_pk "
                                   "WHERE zfilepath.zpath = \"%1\" AND ztokenmetainformation.zanchor IS NOT NULL");
     }
 
-    QSqlQuery query(queryStr.arg(cleanUrl.toString()), database());
-
-    while (query.next()) {
-        const QString sectionName = query.value(0).toString();
-        QString sectionPath = query.value(2).toString();
-        if (m_type == Docset::Type::ZDash) {
-            sectionPath += QLatin1Char('#');
-            sectionPath += query.value(3).toString();
-        }
-
-        results.append(SearchResult{sectionName, QString(),
-                                    parseSymbolType(query.value(1).toString()),
-                                    const_cast<Docset *>(this), sectionPath, QString()});
+    m_db->execute(queryStr.arg(cleanUrl.toString()));
+    while (m_db->next()) {
+        results.append({m_db->value(0).toString(),
+                        parseSymbolType(m_db->value(1).toString()),
+                        const_cast<Docset *>(this),
+                        createPageUrl(m_db->value(2).toString(), m_db->value(3).toString()),
+                        0});
     }
 
     if (results.size() == 1)
         results.clear();
 
     return results;
-}
-
-QSqlDatabase Docset::database() const
-{
-    return QSqlDatabase::database(m_name, true);
 }
 
 void Docset::loadMetadata()
@@ -402,7 +362,7 @@ void Docset::loadMetadata()
 
     if (jsonObject.contains(QStringLiteral("extra"))) {
         const QJsonObject extra = jsonObject[QStringLiteral("extra")].toObject();
-        m_indexFilePath = extra[QStringLiteral("indexFilePath")].toString();
+        m_indexFileUrl = createPageUrl(extra[QStringLiteral("indexFilePath")].toString());
     }
 }
 
@@ -412,21 +372,20 @@ void Docset::countSymbols()
     if (m_type == Docset::Type::Dash) {
         queryStr = QStringLiteral("SELECT type, COUNT(*) FROM searchIndex GROUP BY type");
     } else if (m_type == Docset::Type::ZDash) {
-        queryStr = QStringLiteral("SELECT ztypename, COUNT(*) FROM ztoken JOIN ztokentype"
+        queryStr = QStringLiteral("SELECT ztypename, COUNT(*) FROM ztoken LEFT JOIN ztokentype"
                                   " ON ztoken.ztokentype = ztokentype.z_pk GROUP BY ztypename");
     }
 
-    QSqlQuery query(queryStr, database());
-    if (query.lastError().type() != QSqlError::NoError) {
-        qWarning("SQL Error: %s", qPrintable(query.lastError().text()));
+    if (!m_db->execute(queryStr)) {
+        qWarning("SQL Error: %s", qPrintable(m_db->lastError()));
         return;
     }
 
-    while (query.next()) {
-        const QString symbolTypeStr = query.value(0).toString();
+    while (m_db->next()) {
+        const QString symbolTypeStr = m_db->value(0).toString();
         const QString symbolType = parseSymbolType(symbolTypeStr);
         m_symbolStrings.insertMulti(symbolType, symbolTypeStr);
-        m_symbolCounts[symbolType] += query.value(1).toInt();
+        m_symbolCounts[symbolType] += m_db->value(1).toInt();
     }
 }
 
@@ -443,25 +402,23 @@ void Docset::loadSymbols(const QString &symbolType, const QString &symbolString)
     if (m_type == Docset::Type::Dash) {
         queryStr = QStringLiteral("SELECT name, path FROM searchIndex WHERE type='%1' ORDER BY name ASC");
     } else {
-        queryStr = QStringLiteral("SELECT ztokenname AS name, "
-                                  "CASE WHEN (zanchor IS NULL) THEN zpath "
-                                  "ELSE (zpath || '#' || zanchor) "
-                                  "END AS path FROM ztoken "
-                                  "JOIN ztokenmetainformation ON ztoken.zmetainformation = ztokenmetainformation.z_pk "
-                                  "JOIN zfilepath ON ztokenmetainformation.zfile = zfilepath.z_pk "
-                                  "JOIN ztokentype ON ztoken.ztokentype = ztokentype.z_pk WHERE ztypename='%1' "
+        queryStr = QStringLiteral("SELECT ztokenname, zpath, zanchor "
+                                  "FROM ztoken "
+                                  "LEFT JOIN ztokenmetainformation ON ztoken.zmetainformation = ztokenmetainformation.z_pk "
+                                  "LEFT JOIN zfilepath ON ztokenmetainformation.zfile = zfilepath.z_pk "
+                                  "LEFT JOIN ztokentype ON ztoken.ztokentype = ztokentype.z_pk WHERE ztypename='%1' "
                                   "ORDER BY ztokenname ASC");
     }
 
-    QSqlQuery query(queryStr.arg(symbolString), database());
-    if (query.lastError().type() != QSqlError::NoError) {
-        qWarning("SQL Error: %s", qPrintable(query.lastError().text()));
+    if (!m_db->execute(queryStr.arg(symbolString))) {
+        qWarning("SQL Error: %s", qPrintable(m_db->lastError()));
         return;
     }
 
-    QMap<QString, QString> &symbols = m_symbols[symbolType];
-    while (query.next())
-        symbols.insertMulti(query.value(0).toString(), QDir(documentPath()).absoluteFilePath(query.value(1).toString()));
+    QMap<QString, QUrl> &symbols = m_symbols[symbolType];
+    while (m_db->next())
+        symbols.insertMulti(m_db->value(0).toString(),
+                            createPageUrl(m_db->value(1).toString(), m_db->value(2).toString()));
 }
 
 void Docset::createIndex()
@@ -471,19 +428,17 @@ void Docset::createIndex()
     static const QString indexCreateQuery = QStringLiteral("CREATE INDEX IF NOT EXISTS %1%2"
                                                            " ON %3 (%4 COLLATE NOCASE)");
 
-    QSqlQuery query(database());
-
     const QString tableName = m_type == Type::Dash ? QStringLiteral("searchIndex")
                                                    : QStringLiteral("ztoken");
     const QString columnName = m_type == Type::Dash ? QStringLiteral("name")
                                                     : QStringLiteral("ztokenname");
 
-    query.exec(indexListQuery.arg(tableName));
+    m_db->execute(indexListQuery.arg(tableName));
 
     QStringList oldIndexes;
 
-    while (query.next()) {
-        const QString indexName = query.value(1).toString();
+    while (m_db->next()) {
+        const QString indexName = m_db->value(1).toString();
         if (!indexName.startsWith(IndexNamePrefix))
             continue;
 
@@ -495,9 +450,41 @@ void Docset::createIndex()
 
     // Drop old indexes
     for (const QString &oldIndexName : oldIndexes)
-        query.exec(indexDropQuery.arg(oldIndexName));
+        m_db->execute(indexDropQuery.arg(oldIndexName));
 
-    query.exec(indexCreateQuery.arg(IndexNamePrefix, IndexNameVersion, tableName, columnName));
+    m_db->execute(indexCreateQuery.arg(IndexNamePrefix, IndexNameVersion, tableName, columnName));
+}
+
+QUrl Docset::createPageUrl(const QString &path, const QString &fragment) const
+{
+    QString realPath;
+    QString realFragment;
+
+    if (fragment.isEmpty()) {
+        const QStringList urlParts = path.split(QLatin1Char('#'));
+        realPath = urlParts[0];
+        if (urlParts.size() > 1)
+            realFragment = urlParts[1];
+    } else {
+        realPath = path;
+        realFragment = fragment;
+    }
+
+    static const QRegularExpression dashEntryRegExp(QLatin1String("<dash_entry_.*>"));
+    realPath.remove(dashEntryRegExp);
+    realFragment.remove(dashEntryRegExp);
+
+    QUrl url = QUrl::fromLocalFile(QDir(documentPath()).absoluteFilePath(realPath));
+    if (!realFragment.isEmpty()) {
+        if (realFragment.startsWith(QLatin1String("//apple_ref"))
+                || realFragment.startsWith(QLatin1String("//dash_ref"))) {
+            url.setFragment(realFragment, QUrl::DecodedMode);
+        } else {
+            url.setFragment(realFragment);
+        }
+    }
+
+    return url;
 }
 
 QString Docset::parseSymbolType(const QString &str)
@@ -527,11 +514,14 @@ QString Docset::parseSymbolType(const QString &str)
         // Constant
         {QStringLiteral("data"), QStringLiteral("Constant")},
         {QStringLiteral("econst"), QStringLiteral("Constant")},
+        {QStringLiteral("enumdata"), QStringLiteral("Constant")},
         {QStringLiteral("enumelt"), QStringLiteral("Constant")},
         {QStringLiteral("clconst"), QStringLiteral("Constant")},
         {QStringLiteral("structdata"), QStringLiteral("Constant")},
+        {QStringLiteral("writerid"), QStringLiteral("Constant")},
         {QStringLiteral("Notifications"), QStringLiteral("Constant")},
         // Constructor
+        {QStringLiteral("structctr"), QStringLiteral("Constructor")},
         {QStringLiteral("Public Constructors"), QStringLiteral("Constructor")},
         // Enumeration
         {QStringLiteral("enum"), QStringLiteral("Enumeration")},
@@ -574,20 +564,34 @@ QString Docset::parseSymbolType(const QString &str)
         {QStringLiteral("macro"), QStringLiteral("Macro")},
         // Method
         {QStringLiteral("clm"), QStringLiteral("Method")},
+        {QStringLiteral("enumcm"), QStringLiteral("Method")},
+        {QStringLiteral("enumctr"), QStringLiteral("Method")},
+        {QStringLiteral("enumm"), QStringLiteral("Method")},
         {QStringLiteral("intfctr"), QStringLiteral("Method")},
         {QStringLiteral("intfcm"), QStringLiteral("Method")},
         {QStringLiteral("intfm"), QStringLiteral("Method")},
+        {QStringLiteral("intfsub"), QStringLiteral("Method")},
+        {QStringLiteral("instsub"), QStringLiteral("Method")},
         {QStringLiteral("instctr"), QStringLiteral("Method")},
         {QStringLiteral("instm"), QStringLiteral("Method")},
+        {QStringLiteral("structcm"), QStringLiteral("Method")},
+        {QStringLiteral("structm"), QStringLiteral("Method")},
+        {QStringLiteral("structsub"), QStringLiteral("Method")},
         {QStringLiteral("Class Methods"), QStringLiteral("Method")},
         {QStringLiteral("Inherited Methods"), QStringLiteral("Method")},
         {QStringLiteral("Instance Methods"), QStringLiteral("Method")},
         {QStringLiteral("Private Methods"), QStringLiteral("Method")},
         {QStringLiteral("Protected Methods"), QStringLiteral("Method")},
         {QStringLiteral("Public Methods"), QStringLiteral("Method")},
+        // Operator
+        {QStringLiteral("intfopfunc"), QStringLiteral("Operator")},
+        {QStringLiteral("opfunc"), QStringLiteral("Operator")},
         // Property
+        {QStringLiteral("enump"), QStringLiteral("Property")},
+        {QStringLiteral("intfdata"), QStringLiteral("Property")},
         {QStringLiteral("intfp"), QStringLiteral("Property")},
         {QStringLiteral("instp"), QStringLiteral("Property")},
+        {QStringLiteral("structp"), QStringLiteral("Property")},
         {QStringLiteral("Inherited Properties"), QStringLiteral("Property")},
         {QStringLiteral("Private Properties"), QStringLiteral("Property")},
         {QStringLiteral("Protected Properties"), QStringLiteral("Property")},
@@ -612,4 +616,189 @@ QString Docset::parseSymbolType(const QString &str)
     };
 
     return aliases.value(str, str);
+}
+
+// ported from DevDocs' searcher.coffee:
+// (https://github.com/Thibaut/devdocs/blob/50f583246d5fbd92be7b71a50bfa56cf4e239c14/assets/javascripts/app/searcher.coffee#L91)
+static void matchFuzzy(int nLen, const unsigned char *needle, int hLen,
+                       const unsigned char *haystack, int *start, int *len)
+{
+    int j = 0;
+    int groups = 0;
+    for (int i = 0; i < nLen; ++i) {
+        bool found = false;
+        bool first = true;
+        int distance = 0;
+        while (j < hLen) {
+            if (needle[i] == haystack[j++]) {
+                if (*start == -1)
+                    *start = j - 1;  // first matched char
+                *len = j - *start;
+                found = true;
+                break;  // continue the outer loop
+            } else {
+                // optimizations to reduce returned number of results
+                // (search was returning too many irrelevant results with large docsets)
+                if (first) {
+                    groups += 1;
+                    if (groups > 3)  // optimization #1: too many mismatches
+                        break;
+                    first = false;
+                }
+
+                if (i != 0) {
+                    distance += 1;
+                    if (distance > 8) {  // optimization #2: too large distance between found chars
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!found) {
+            // end of haystack, char not found
+            *start = -1;
+            return;
+        }
+    }
+}
+
+static int scoreExact(int matchIndex, int matchLen, const unsigned char *value, int valueLen)
+{
+    int score = 100;
+    const unsigned char DOT = '.';
+    // Remove one point for each unmatched character.
+    score -= (valueLen - matchLen);
+    if (matchIndex > 0) {
+        if (value[matchIndex - 1] == DOT) {
+            // If the character preceding the query is a dot, assign the same
+            // score as if the query was found at the beginning of the string,
+            // minus one.
+            score += (matchIndex - 1);
+        } else if (matchLen == 1) {
+            // Don't match a single-character query unless it's found at the
+            // beginning of the string or is preceded by a dot.
+            return 0;
+        } else {
+            // (1) Remove one point for each unmatched character up to
+            //     the nearest preceding dot or the beginning of the
+            //     string.
+            // (2) Remove one point for each unmatched character
+            //     following the query.
+            int i = matchIndex - 2;
+            while (i >= 0 && value[i] != DOT)
+                --i;
+            score -= (matchIndex - i)                       // (1)
+                     + (valueLen - matchLen - matchIndex);  // (2)
+        }
+
+        // Remove one point for each dot preceding the query, except for the
+        // one immediately before the query.
+        int separators = 0;
+        int i = matchIndex - 2;
+
+        while (i >= 0) {
+            if (value[i] == DOT)
+                ++separators;
+            --i;
+        }
+
+        score -= separators;
+    }
+
+    // Remove five points for each dot following the query.
+    int separators = 0;
+    int i = valueLen - matchLen - matchIndex - 1;
+    while (i >= 0) {
+        if (value[matchIndex + matchLen + i] == DOT) {
+            ++separators;
+        }
+        --i;
+    }
+
+    score -= separators * 5;
+
+    return qMax(1, score);
+}
+
+static int scoreFuzzy(int matchIndex, int matchLen, const unsigned char *value)
+{
+    if (matchIndex == 0 || value[matchIndex - 1] == '.') {
+        // score between 66..99, if the match follows a dot, or starts the string
+        return qMax(66, 100 - matchLen);
+    } else {
+        if (value[matchIndex + matchLen] == 0) {
+            // score between 33..66, if the match is at the end of the string
+            return qMax(33, 67 - matchLen);
+        } else {
+            // score between 1..33 otherwise (match in the middle of the string)
+            return qMax(1, 34 - matchLen);
+        }
+    }
+}
+
+static void scoreFunc(sqlite3_context *context, int argc, sqlite3_value **argv) {
+    Q_UNUSED(argc);
+    const unsigned char *needleOrig = sqlite3_value_text(argv[0]);
+    const unsigned char *haystackOrig = sqlite3_value_text(argv[1]);
+
+    int haystackLen = 0, needleLen = 0;
+    while (haystackOrig[haystackLen] != 0)
+        ++haystackLen;
+    while (needleOrig[needleLen] != 0)
+        ++needleLen;
+    QScopedArrayPointer<unsigned char> needle(new unsigned char[needleLen + 1]);
+    QScopedArrayPointer<unsigned char> haystack(new unsigned char[haystackLen + 1]);
+    for (int i = 0; i < needleLen + 1; ++i) {
+        char c = needleOrig[i];
+        if (c >= 'A' && c <= 'Z')
+            c += 32;
+        needle[i] = c;
+    }
+
+    for (int i = 0, j = 0; i < haystackLen + 1; ++i, ++j) {
+        char c = haystackOrig[i];
+        if ((i > 0 && haystackOrig[i - 1] == ':' && c == ':') // C++ (::)
+                || c == '/' || c == '_' || c == ' ') { // Go, some Guides
+            haystack[j] = '.';
+        } else {
+            if (c >= 'A' && c <= 'Z')
+                c += 32;
+            haystack[j] = c;
+        }
+    }
+
+    int best = 0;
+    int match1 = -1;
+    int match1Len;
+
+    matchFuzzy(needleLen, needle.data(), haystackLen, haystack.data(), &match1, &match1Len);
+
+    if (match1 == -1) { // no match
+        // simply return 0
+        sqlite3_result_int(context, 0);
+        return;
+    } else if (needleLen == match1Len) { // exact match
+        best = scoreExact(match1, match1Len, haystack.data(), haystackLen);
+    } else {
+        best = scoreFuzzy(match1, match1Len, haystack.data());
+
+        int indexOfLastDot = -1;
+        for (int i = 0; haystack[i] != 0; ++i) {
+            if (haystack[i] == '.')
+                indexOfLastDot = i;
+        }
+
+        if (indexOfLastDot != -1) {
+            int match2 = -1, match2Len;
+            matchFuzzy(needleLen, needle.data(), haystackLen - (indexOfLastDot + 1),
+                       haystack.data() + indexOfLastDot + 1, &match2, &match2Len);
+            if (match2 != -1) {
+                best = qMax(best, scoreFuzzy(match2, match2Len,
+                                             haystack.data() + indexOfLastDot + 1));
+            }
+        }
+    }
+
+    sqlite3_result_int(context, best);
 }

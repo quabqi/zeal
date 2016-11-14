@@ -26,19 +26,15 @@
 
 #include "searchresult.h"
 
-#include <QAbstractItemModel>
+#include <QAbstractListModel>
 
 namespace Zeal {
+namespace Registry {
 
-class SearchModel : public QAbstractItemModel
+class SearchModel : public QAbstractListModel
 {
     Q_OBJECT
 public:
-    // TODO: Standardise roles across app
-    enum ItemDataRole {
-        DocsetIconRole = Qt::UserRole
-    };
-
     explicit SearchModel(QObject *parent = nullptr);
     SearchModel(const SearchModel &other);
 
@@ -46,9 +42,7 @@ public:
 
     QVariant data(const QModelIndex &index, int role) const override;
     QModelIndex index(int row, int column, const QModelIndex &parent) const override;
-    QModelIndex parent(const QModelIndex &child) const override;
     int rowCount(const QModelIndex &parent = QModelIndex()) const override;
-    int columnCount(const QModelIndex &parent) const override;
     bool removeRows(int row, int count, const QModelIndex &parent = QModelIndex()) override;
     void removeSearchResultWithName(const QString &name);
 
@@ -62,6 +56,7 @@ private:
     QList<SearchResult> m_dataList;
 };
 
+} // namespace Registry
 } // namespace Zeal
 
 #endif // SEARCHMODEL_H

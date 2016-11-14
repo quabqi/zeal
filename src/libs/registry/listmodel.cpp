@@ -25,8 +25,9 @@
 
 #include "docset.h"
 #include "docsetregistry.h"
+#include "itemdatarole.h"
 
-using namespace Zeal;
+using namespace Zeal::Registry;
 
 ListModel::ListModel(DocsetRegistry *docsetRegistry, QObject *parent) :
     QAbstractItemModel(parent),
@@ -72,10 +73,7 @@ QVariant ListModel::data(const QModelIndex &index, int role) const
     case Qt::DisplayRole:
         switch (indexLevel(index)) {
         case Level::DocsetLevel:
-            if (!index.column())
-                return m_docsetRegistry->docset(index.row())->title();
-            else
-                return m_docsetRegistry->docset(index.row())->indexFilePath();
+            return m_docsetRegistry->docset(index.row())->title();
         case Level::GroupLevel: {
             DocsetItem *docsetItem = reinterpret_cast<DocsetItem *>(index.internalPointer());
             const QString symbolType = docsetItem->groups.at(index.row())->symbolType;
@@ -85,19 +83,28 @@ QVariant ListModel::data(const QModelIndex &index, int role) const
         case Level::SymbolLevel: {
             GroupItem *groupItem = reinterpret_cast<GroupItem *>(index.internalPointer());
             auto it = groupItem->docsetItem->docset->symbols(groupItem->symbolType).cbegin() + index.row();
-            if (!index.column())
-                return it.key();
-            else
-                return it.value();
+            return it.key();
         }
         default:
             return QVariant();
         }
-    case DocsetNameRole:
+    case ItemDataRole::UrlRole:
+        switch (indexLevel(index)) {
+        case Level::DocsetLevel:
+            return m_docsetRegistry->docset(index.row())->indexFileUrl();
+        case Level::SymbolLevel: {
+            GroupItem *groupItem = reinterpret_cast<GroupItem *>(index.internalPointer());
+            auto it = groupItem->docsetItem->docset->symbols(groupItem->symbolType).cbegin() + index.row();
+            return it.value();
+        }
+        default:
+            return QVariant();
+        }
+    case ItemDataRole::DocsetNameRole:
         if (index.parent().isValid())
             return QVariant();
         return m_docsetRegistry->docset(index.row())->name();
-    case UpdateAvailableRole:
+    case ItemDataRole::UpdateAvailableRole:
         if (index.parent().isValid())
             return QVariant();
         return m_docsetRegistry->docset(index.row())->hasUpdate;
@@ -145,10 +152,8 @@ QModelIndex ListModel::parent(const QModelIndex &child) const
 
 int ListModel::columnCount(const QModelIndex &parent) const
 {
-    if (indexLevel(parent) == Level::DocsetLevel)
-        return 1;
-    else
-        return 2;
+    Q_UNUSED(parent);
+    return 1;
 }
 
 int ListModel::rowCount(const QModelIndex &parent) const

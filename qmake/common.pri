@@ -19,7 +19,9 @@ DEFINES *= QT_NO_URL_CAST_FROM_STRING
 
 # Workaround for AppVeyor: Do not warn if the library had to be created.
 # Based on https://codereview.qt-project.org/150326
-win32-g++:QMAKE_LIB = ar -rc
+win32-g++:lessThan(QT_VERSION, "5.6.0") {
+    QMAKE_LIB = ar -rc
+}
 
 # Keep build directory clean
 MOC_DIR = $$BUILD_ROOT/.moc
@@ -28,19 +30,16 @@ RCC_DIR = $$BUILD_ROOT/.rcc
 UI_DIR = $$BUILD_ROOT/.ui
 
 # Application version
-VERSION = 0.2.1
+VERSION = 0.3.1
 DEFINES += ZEAL_VERSION=\\\"$${VERSION}\\\"
 
 # Browser engine
-CONFIG(zeal_qtwebkit) {
-    qtHaveModule(webkitwidgets): BROWSER_ENGINE = qtwebkit
-    else: error("Qt WebKit is not available.")
-} else:CONFIG(zeal_qtwebengine) {
+CONFIG(zeal_qtwebengine) {
     qtHaveModule(webenginewidgets): BROWSER_ENGINE = qtwebengine
     else: error("Qt WebEngine is not available.")
 } else {
-    qtHaveModule(webenginewidgets): BROWSER_ENGINE = qtwebengine
-    else: qtHaveModule(webkitwidgets): BROWSER_ENGINE = qtwebkit
+    qtHaveModule(webkitwidgets): BROWSER_ENGINE = qtwebkit
+    else: qtHaveModule(webenginewidgets): BROWSER_ENGINE = qtwebengine
     else: error("Zeal requires Qt WebEngine or Qt WebKit.")
 }
 
@@ -58,16 +57,16 @@ equals(BROWSER_ENGINE, qtwebengine) {
 CONFIG(zeal_portable) {
     message("Portable build: Yes.")
     DEFINES += PORTABLE_BUILD
-} else {
-    message("Portable build: No.")
 }
 
 # Unix installation prefix
 unix:!macx {
     isEmpty(PREFIX): PREFIX = /usr
-    message("Install prefix: $$PREFIX")
-    target.path = $$PREFIX/bin
+}
 
-    # Always install target
-    INSTALLS += target
+unix:!macx:packagesExist(appindicator-0.1) {
+    CONFIG += link_pkgconfig
+    PKGCONFIG += appindicator-0.1 gtk+-2.0
+    DEFINES += USE_APPINDICATOR
+    message("AppIndicator support: Yes.")
 }

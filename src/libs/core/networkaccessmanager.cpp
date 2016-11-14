@@ -1,6 +1,6 @@
 /****************************************************************************
 **
-** Copyright (C) 2015-2016 Oleg Shparber
+** Copyright (C) 2016 Oleg Shparber
 ** Contact: https://go.zealdocs.org/l/contact
 **
 ** This file is part of Zeal.
@@ -20,41 +20,25 @@
 **
 ****************************************************************************/
 
-#ifndef ZEAL_CORE_LOCALSERVER_H
-#define ZEAL_CORE_LOCALSERVER_H
+#include "networkaccessmanager.h"
 
-#include <QObject>
+#include <QNetworkRequest>
 
-class QLocalServer;
+using namespace Zeal::Core;
 
-namespace Zeal {
-
-namespace Registry {
-class SearchQuery;
-} // namespace Registry
-
-namespace Core {
-
-class LocalServer : public QObject
+NetworkAccessManager::NetworkAccessManager(QObject *parent)
+    : QNetworkAccessManager(parent)
 {
-    Q_OBJECT
-public:
-    explicit LocalServer(QObject *parent = 0);
+}
 
-    QString errorString() const;
+QNetworkReply *NetworkAccessManager::createRequest(QNetworkAccessManager::Operation op,
+                                             const QNetworkRequest &request,
+                                             QIODevice *outgoingData)
+{
+    // Detect URLs without schema, and prevent them from being requested on a local filesytem.
+    const QUrl url = request.url();
+    if (url.scheme() == QLatin1String("file") && !url.host().isEmpty())
+        return QNetworkAccessManager::createRequest(GetOperation, QNetworkRequest(), outgoingData);
 
-    bool start(bool force = false);
-
-    static bool sendQuery(const Registry::SearchQuery &query, bool preventActivation);
-
-signals:
-    void newQuery(const Registry::SearchQuery &query, bool preventActivation);
-
-private:
-    QLocalServer *m_localServer = nullptr;
-};
-
-} // namespace Core
-} // namespace Zeal
-
-#endif // ZEAL_CORE_LOCALSERVER_H
+    return QNetworkAccessManager::createRequest(op, request, outgoingData);
+}

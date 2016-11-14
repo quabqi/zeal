@@ -23,7 +23,7 @@
 
 #include "searchquery.h"
 
-using namespace Zeal;
+using namespace Zeal::Registry;
 
 namespace {
 const char prefixSeparator = ':';
@@ -126,23 +126,13 @@ void SearchQuery::setQuery(const QString &str)
     m_query = str;
 }
 
-QString SearchQuery::sanitizedQuery() const
-{
-    QString q = m_query;
-    q.replace(QLatin1String("\\"), QLatin1String("\\\\"));
-    q.replace(QLatin1String("_"), QLatin1String("\\_"));
-    q.replace(QLatin1String("%"), QLatin1String("\\%"));
-    q.replace(QLatin1String("'"), QLatin1String("''"));
-    return q;
-}
-
-QDataStream &Zeal::operator<<(QDataStream &out, const SearchQuery &query)
+QDataStream &operator<<(QDataStream &out, const Zeal::Registry::SearchQuery &query)
 {
     out << query.toString();
     return out;
 }
 
-QDataStream &Zeal::operator>>(QDataStream &in, SearchQuery &query)
+QDataStream &operator>>(QDataStream &in, Zeal::Registry::SearchQuery &query)
 {
     QString str;
     in >> str;

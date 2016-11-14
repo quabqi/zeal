@@ -27,10 +27,15 @@
 #include <QIcon>
 #include <QMap>
 #include <QMetaObject>
-
-class QSqlDatabase;
+#include <QUrl>
 
 namespace Zeal {
+
+namespace Util {
+class SQLiteDatabase;
+}
+
+namespace Registry {
 
 struct CancellationToken;
 struct SearchResult;
@@ -54,12 +59,12 @@ public:
     QString documentPath() const;
     QIcon icon() const;
     QIcon symbolTypeIcon(const QString &symbolType) const;
-    QString indexFilePath() const;
+    QUrl indexFileUrl() const;
 
     QMap<QString, int> symbolCounts() const;
     int symbolCount(const QString &symbolType) const;
 
-    const QMap<QString, QString> &symbols(const QString &symbolType) const;
+    const QMap<QString, QUrl> &symbols(const QString &symbolType) const;
 
     QList<SearchResult> search(const QString &query, const CancellationToken &token) const;
     QList<SearchResult> relatedLinks(const QUrl &url) const;
@@ -74,16 +79,15 @@ private:
         ZDash
     };
 
-    QSqlDatabase database() const;
     void loadMetadata();
     void countSymbols();
     void loadSymbols(const QString &symbolType) const;
     void loadSymbols(const QString &symbolType, const QString &symbolString) const;
     void createIndex();
+    QUrl createPageUrl(const QString &path, const QString &fragment = QString()) const;
 
     static QString parseSymbolType(const QString &str);
 
-    QString m_sourceId;
     QString m_name;
     QString m_title;
     QStringList m_keywords;
@@ -93,13 +97,15 @@ private:
     QString m_path;
     QIcon m_icon;
 
-    QString m_indexFilePath;
+    QUrl m_indexFileUrl;
 
     QMap<QString, QString> m_symbolStrings;
     QMap<QString, int> m_symbolCounts;
-    mutable QMap<QString, QMap<QString, QString>> m_symbols;
+    mutable QMap<QString, QMap<QString, QUrl>> m_symbols;
+    Util::SQLiteDatabase *m_db = nullptr;
 };
 
+} // namespace Registry
 } // namespace Zeal
 
 #endif // DOCSET_H

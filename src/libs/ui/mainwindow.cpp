@@ -25,6 +25,7 @@
 #include "ui_mainwindow.h"
 
 #include "aboutdialog.h"
+#include "docsetsdialog.h"
 #include "searchitemdelegate.h"
 #include "settingsdialog.h"
 #include "qxtglobalshortcut/qxtglobalshortcut.h"
@@ -32,6 +33,7 @@
 #include <core/application.h>
 #include <core/settings.h>
 #include <registry/docsetregistry.h>
+#include <registry/itemdatarole.h>
 #include <registry/listmodel.h>
 #include <registry/searchmodel.h>
 
@@ -78,8 +80,8 @@ struct TabState
 {
     explicit TabState()
     {
-        searchModel = new Zeal::SearchModel();
-        tocModel = new Zeal::SearchModel();
+        searchModel = new Registry::SearchModel();
+        tocModel = new Registry::SearchModel();
 
         webPage = new QWebPage();
 #ifndef USE_WEBENGINE
@@ -96,8 +98,8 @@ struct TabState
         , tocScrollPosition(other.tocScrollPosition)
         , webViewZoomFactor(other.webViewZoomFactor)
     {
-        searchModel = new Zeal::SearchModel(*other.searchModel);
-        tocModel = new Zeal::SearchModel(*other.tocModel);
+        searchModel = new Registry::SearchModel(*other.searchModel);
+        tocModel = new Registry::SearchModel(*other.tocModel);
 
         webPage = new QWebPage();
 #ifndef USE_WEBENGINE
@@ -159,13 +161,13 @@ struct TabState
     QString searchQuery;
 
     // Content/Search results tree view state
-    Zeal::SearchModel *searchModel = nullptr;
+    Registry::SearchModel *searchModel = nullptr;
     QModelIndexList selections;
     QModelIndexList expansions;
     int searchScrollPosition = 0;
 
     // TOC list view state
-    Zeal::SearchModel *tocModel = nullptr;
+    Registry::SearchModel *tocModel = nullptr;
     int tocScrollPosition = 0;
 
     QWebPage *webPage = nullptr;
@@ -177,7 +179,7 @@ MainWindow::MainWindow(Core::Application *app, QWidget *parent) :
     ui(new Ui::MainWindow),
     m_application(app),
     m_settings(app->settings()),
-    m_zealListModel(new ListModel(app->docsetRegistry(), this)),
+    m_zealListModel(new Registry::ListModel(app->docsetRegistry(), this)),
     m_globalShortcut(new QxtGlobalShortcut(m_settings->showShortcut, this)),
     m_openDocsetTimer(new QTimer(this))
 {
@@ -234,6 +236,12 @@ MainWindow::MainWindow(Core::Application *app, QWidget *parent) :
     addAction(ui->actionForward);
     connect(ui->actionBack, &QAction::triggered, ui->webView, &SearchableWebView::back);
     connect(ui->actionForward, &QAction::triggered, ui->webView, &SearchableWebView::forward);
+
+    // Tools Menu
+    connect(ui->actionDocsets, &QAction::triggered, [this]() {
+        QScopedPointer<DocsetsDialog> dialog(new DocsetsDialog(m_application, this));
+        dialog->exec();
+    });
 
     // Help Menu
     connect(ui->actionSubmitFeedback, &QAction::triggered, [this]() {
@@ -310,9 +318,9 @@ MainWindow::MainWindow(Core::Application *app, QWidget *parent) :
     ui->lineEdit->setFocus();
     setupSearchBoxCompletions();
     SearchItemDelegate *delegate = new SearchItemDelegate(ui->treeView);
-    delegate->setDecorationRoles({Zeal::SearchModel::DocsetIconRole, Qt::DecorationRole});
+    delegate->setDecorationRoles({Registry::ItemDataRole::DocsetIconRole, Qt::DecorationRole});
     connect(ui->lineEdit, &QLineEdit::textChanged, [delegate](const QString &text) {
-        delegate->setHighlight(Zeal::SearchQuery::fromString(text).query());
+        delegate->setHighlight(Registry::SearchQuery::fromString(text).query());
     });
     ui->treeView->setItemDelegate(delegate);
 
@@ -332,7 +340,7 @@ MainWindow::MainWindow(Core::Application *app, QWidget *parent) :
         const QString name = docsetName(url);
         m_tabBar->setTabIcon(m_tabBar->currentIndex(), docsetIcon(name));
 
-        Docset *docset = m_application->docsetRegistry()->docset(name);
+        Registry::Docset *docset = m_application->docsetRegistry()->docset(name);
         if (docset)
             currentTabState()->tocModel->setResults(docset->relatedLinks(url));
 
@@ -346,6 +354,7 @@ MainWindow::MainWindow(Core::Application *app, QWidget *parent) :
 
         setWindowTitle(QStringLiteral("%1 - Zeal").arg(title));
         m_tabBar->setTabText(m_tabBar->currentIndex(), title);
+        m_tabBar->setTabToolTip(m_tabBar->currentIndex(), title);
     });
 
     connect(ui->webView, &SearchableWebView::linkClicked, [this](const QUrl &url) {
@@ -355,12 +364,12 @@ MainWindow::MainWindow(Core::Application *app, QWidget *parent) :
             QDesktopServices::openUrl(url);
     });
 
-    connect(m_application->docsetRegistry(), &DocsetRegistry::queryCompleted,
-            this, [this](const QList<SearchResult> &results) {
+    connect(m_application->docsetRegistry(), &Registry::DocsetRegistry::queryCompleted,
+            this, [this](const QList<Registry::SearchResult> &results) {
         currentTabState()->searchModel->setResults(results);
     });
 
-    connect(m_application->docsetRegistry(), &DocsetRegistry::docsetRemoved,
+    connect(m_application->docsetRegistry(), &Registry::DocsetRegistry::docsetRemoved,
             this, [this](const QString &name) {
         setupSearchBoxCompletions();
         for (TabState *tabState : m_tabStates) {
@@ -383,7 +392,7 @@ MainWindow::MainWindow(Core::Application *app, QWidget *parent) :
         }
     });
 
-    connect(m_application->docsetRegistry(), &DocsetRegistry::docsetAdded,
+    connect(m_application->docsetRegistry(), &Registry::DocsetRegistry::docsetAdded,
             this, [this](const QString &) {
         setupSearchBoxCompletions();
     });
@@ -394,7 +403,7 @@ MainWindow::MainWindow(Core::Application *app, QWidget *parent) :
 
         currentTabState()->searchQuery = text;
         m_cancelSearch.cancel();
-        m_cancelSearch = CancellationToken();
+        m_cancelSearch = Registry::CancellationToken();
         m_application->docsetRegistry()->search(text, m_cancelSearch);
         if (text.isEmpty()) {
             currentTabState()->tocModel->setResults();
@@ -476,7 +485,7 @@ MainWindow::~MainWindow()
     qDeleteAll(m_tabStates);
 }
 
-void MainWindow::search(const SearchQuery &query)
+void MainWindow::search(const Registry::SearchQuery &query)
 {
     if (query.isEmpty())
         return;
@@ -487,18 +496,11 @@ void MainWindow::search(const SearchQuery &query)
 
 void MainWindow::openDocset(const QModelIndex &index)
 {
-    const QVariant urlStr = index.sibling(index.row(), 1).data();
-    if (urlStr.isNull())
+    const QVariant url = index.data(Registry::ItemDataRole::UrlRole);
+    if (url.isNull())
         return;
 
-    // TODO: Keep anchor separately from file address
-    QStringList urlParts = urlStr.toString().split(QLatin1Char('#'));
-    QUrl url = QUrl::fromLocalFile(urlParts[0]);
-    if (urlParts.count() > 1)
-        // NOTE: QUrl::DecodedMode is a fix for #121. Let's hope it doesn't break anything.
-        url.setFragment(urlParts[1], QUrl::DecodedMode);
-
-    ui->webView->load(url);
+    ui->webView->load(url.toUrl());
 
     // QWebEnginePage::load() always steals focus, so no need to do it twice.
 #ifndef USE_WEBENGINE
@@ -514,7 +516,7 @@ QString MainWindow::docsetName(const QUrl &url) const
 
 QIcon MainWindow::docsetIcon(const QString &docsetName) const
 {
-    Docset *docset = m_application->docsetRegistry()->docset(docsetName);
+    Registry::Docset *docset = m_application->docsetRegistry()->docset(docsetName);
     return docset ? docset->icon() : QIcon(QStringLiteral(":/icons/logo/icon.png"));
 }
 
@@ -553,6 +555,7 @@ void MainWindow::createTab(int index)
     else if (index == -1)
         index = m_tabStates.size();
 
+    using Registry::SearchModel;
     TabState *newTab = new TabState();
     connect(newTab->searchModel, &SearchModel::queryCompleted, this, &MainWindow::queryCompleted);
     connect(newTab->tocModel, &SearchModel::queryCompleted, this, &MainWindow::syncToc);
@@ -569,6 +572,7 @@ void MainWindow::duplicateTab(int index)
     if (index < 0 || index >= m_tabStates.size())
         return;
 
+    using Registry::SearchModel;
     TabState *newTab = new TabState(*m_tabStates.at(index));
     connect(newTab->searchModel, &SearchModel::queryCompleted, this, &MainWindow::queryCompleted);
     connect(newTab->tocModel, &SearchModel::queryCompleted, this, &MainWindow::syncToc);
@@ -615,7 +619,7 @@ TabState *MainWindow::currentTabState() const
 void MainWindow::setupSearchBoxCompletions()
 {
     QStringList completions;
-    for (const Docset * const docset: m_application->docsetRegistry()->docsets()) {
+    for (const Registry::Docset * const docset: m_application->docsetRegistry()->docsets()) {
         if (docset->keywords().isEmpty())
             continue;
 

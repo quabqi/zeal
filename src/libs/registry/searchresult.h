@@ -25,27 +25,33 @@
 #define SEARCHRESULT_H
 
 #include <QString>
+#include <QUrl>
 
 namespace Zeal {
+namespace Registry {
 
 class Docset;
 
 struct SearchResult
 {
     QString name;
-    QString parentName;
     QString type;
 
     Docset *docset;
 
-    QString path;
+    QUrl url;
 
-    // TODO: Remove
-    QString query;
+    int score;
 
-    bool operator<(const SearchResult &r) const;
+    inline bool operator<(const SearchResult &other) const
+    {
+        if (score == other.score)
+            return QString::compare(name, other.name, Qt::CaseInsensitive) < 0;
+        return score > other.score;
+    }
 };
 
+} // namespace Registry
 } // namespace Zeal
 
 #endif // SEARCHRESULT_H

@@ -1,6 +1,10 @@
 # Zeal
 
-[![GitHub release](https://img.shields.io/github/release/zealdocs/zeal.svg?style=flat-square)](https://github.com/zealdocs/zeal/releases) [![IRC](https://img.shields.io/badge/irc-%23zealdocs-blue.svg?style=flat-square)](https://kiwiirc.com/client/irc.freenode.net/#zealdocs)
+[![Changelog](https://img.shields.io/github/release/zealdocs/zeal.svg?style=flat-square)](https://github.com/zealdocs/zeal/releases)
+[![IRC](https://img.shields.io/badge/chat-on%20irc-blue.svg?style=flat-square)](https://kiwiirc.com/client/irc.freenode.net/#zealdocs)
+[![Telegram Chat](https://img.shields.io/badge/chat-on%20telegram-179cde.svg?style=flat-square)](https://telegram.me/zealdocschat)
+[![Telegram Channel](https://img.shields.io/badge/follow-on%20telegram-179cde.svg?style=flat-square)](https://telegram.me/zealdocs)
+[![Twitter](https://img.shields.io/badge/follow-on%20twitter-1da1f2.svg?style=flat-square)](https://twitter.com/zealdocs)
 
 > **zeal** *noun*
 >
@@ -31,12 +35,12 @@ Get binary builds for Windows and Linux from the [download page](https://zealdoc
 
 ## How to use
 
-After installing Zeal, you need to download docsets. Go to *File->Options->Docsets*, select the ones you want, and click the *Download* button.
+After installing Zeal, you need to download docsets. Go to *Tools->Docsets*, select the ones you want, and click the *Download* button.
 
 ## How to compile
 
 ### Requirements
-* [Qt](https://www.qt.io/) version 5.2.0 or above. Required modules: Qt WebKit Widgets, Qt SQL plugin for SQLite, Qt X11 Extras (X11 only).
+* [Qt](https://www.qt.io/) version 5.2.0 or above. Required modules: Qt WebKit Widgets, Qt X11 Extras (X11 only).
 * [libarchive](http://libarchive.org/).
 * X11 only: `xcb-util-keysyms`.
 * Ubuntu Unity only: [libappindicator](https://launchpad.net/libappindicator).

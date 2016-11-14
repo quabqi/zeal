@@ -1,6 +1,6 @@
 /****************************************************************************
 **
-** Copyright (C) 2015-2016 Oleg Shparber
+** Copyright (C) 2016 Jerzy Kozera
 ** Contact: https://go.zealdocs.org/l/contact
 **
 ** This file is part of Zeal.
@@ -20,41 +20,47 @@
 **
 ****************************************************************************/
 
-#ifndef ZEAL_CORE_LOCALSERVER_H
-#define ZEAL_CORE_LOCALSERVER_H
+#ifndef ZEAL_UTIL_SQLITEDATABASE_H
+#define ZEAL_UTIL_SQLITEDATABASE_H
 
-#include <QObject>
+#include <QStringList>
+#include <QVariant>
 
-class QLocalServer;
+struct sqlite3;
+struct sqlite3_stmt;
 
 namespace Zeal {
+namespace Util {
 
-namespace Registry {
-class SearchQuery;
-} // namespace Registry
-
-namespace Core {
-
-class LocalServer : public QObject
+class SQLiteDatabase
 {
-    Q_OBJECT
 public:
-    explicit LocalServer(QObject *parent = 0);
+    explicit SQLiteDatabase(const QString &path);
+    virtual ~SQLiteDatabase();
 
-    QString errorString() const;
+    bool isOpen() const;
+    QStringList tables();
 
-    bool start(bool force = false);
+    bool execute(const QString &queryStr);
+    bool next();
 
-    static bool sendQuery(const Registry::SearchQuery &query, bool preventActivation);
+    QVariant value(int index) const;
 
-signals:
-    void newQuery(const Registry::SearchQuery &query, bool preventActivation);
+    QString lastError() const;
+
+    sqlite3 *handle() const;
 
 private:
-    QLocalServer *m_localServer = nullptr;
+    void close();
+    void finalize();
+    void updateLastError();
+
+    sqlite3 *m_db = nullptr;
+    sqlite3_stmt *m_stmt = nullptr;
+    QString m_lastError;
 };
 
-} // namespace Core
+} // namespace Util
 } // namespace Zeal
 
-#endif // ZEAL_CORE_LOCALSERVER_H
+#endif // ZEAL_UTIL_SQLITEDATABASE_H

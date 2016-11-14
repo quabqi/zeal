@@ -2,7 +2,7 @@ include($$ZEAL_COMMON_PRI)
 
 TEMPLATE = app
 
-QT += gui widgets sql concurrent
+QT += gui widgets concurrent
 
 SOURCES += \
     main.cpp
@@ -14,6 +14,9 @@ DESTDIR = $$BUILD_ROOT/bin
 
 unix:!macx {
     TARGET = zeal
+    target.path = $$PREFIX/bin
+
+    INSTALLS += target
 }
 
 win32 {
@@ -33,6 +36,7 @@ LIBS += -lCore -lUi -lRegistry -lUtil
 for(lib_dir, $$list($$files($$SRC_ROOT/src/libs/*))) {
     !equals(lib_dir, $$SRC_ROOT/src/libs/libs.pro) {
         include($$lib_dir/$$basename(lib_dir).pri)
-#        LIBS += -l$$ZEAL_LIB_NAME
+        PRE_TARGETDEPS += $$BUILD_ROOT/.lib/lib$${ZEAL_LIB_NAME}.a
+        # LIBS += -l$$ZEAL_LIB_NAME
     }
 }

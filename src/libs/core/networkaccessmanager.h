@@ -1,6 +1,6 @@
 /****************************************************************************
 **
-** Copyright (C) 2015-2016 Oleg Shparber
+** Copyright (C) 2016 Oleg Shparber
 ** Contact: https://go.zealdocs.org/l/contact
 **
 ** This file is part of Zeal.
@@ -20,41 +20,26 @@
 **
 ****************************************************************************/
 
-#ifndef ZEAL_CORE_LOCALSERVER_H
-#define ZEAL_CORE_LOCALSERVER_H
+#ifndef ZEAL_CORE_NETWORKACCESSMANAGER_H
+#define ZEAL_CORE_NETWORKACCESSMANAGER_H
 
-#include <QObject>
-
-class QLocalServer;
+#include <QNetworkAccessManager>
 
 namespace Zeal {
-
-namespace Registry {
-class SearchQuery;
-} // namespace Registry
-
 namespace Core {
 
-class LocalServer : public QObject
+class NetworkAccessManager : public QNetworkAccessManager
 {
     Q_OBJECT
 public:
-    explicit LocalServer(QObject *parent = 0);
+    NetworkAccessManager(QObject *parent = nullptr);
 
-    QString errorString() const;
-
-    bool start(bool force = false);
-
-    static bool sendQuery(const Registry::SearchQuery &query, bool preventActivation);
-
-signals:
-    void newQuery(const Registry::SearchQuery &query, bool preventActivation);
-
-private:
-    QLocalServer *m_localServer = nullptr;
+protected:
+    QNetworkReply *createRequest(Operation op, const QNetworkRequest &request,
+                                 QIODevice *outgoingData = nullptr) override;
 };
 
 } // namespace Core
 } // namespace Zeal
 
-#endif // ZEAL_CORE_LOCALSERVER_H
+#endif // ZEAL_CORE_NETWORKACCESSMANAGER_H

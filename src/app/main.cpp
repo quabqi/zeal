@@ -31,7 +31,6 @@
 #include <QDir>
 #include <QIcon>
 #include <QMessageBox>
-#include <QSqlDatabase>
 #include <QTextStream>
 #include <QUrlQuery>
 
@@ -51,7 +50,7 @@ struct CommandLineParameters
 {
     bool force;
     bool preventActivation;
-    SearchQuery query;
+    Registry::SearchQuery query;
 #ifdef Q_OS_WIN32
     bool registerProtocolHandlers;
     bool unregisterProtocolHandlers;
@@ -191,11 +190,11 @@ int main(int argc, char *argv[])
 
     if (clParams.unregisterProtocolHandlers) {
         unregisterProtocolHandlers(protocols);
-        ::exit(EXIT_SUCCESS);
+        return EXIT_SUCCESS;
     } else {
         registerProtocolHandlers(protocols, clParams.registerProtocolHandlers);
         if (clParams.registerProtocolHandlers)
-            ::exit(EXIT_SUCCESS);
+            return EXIT_SUCCESS;
     }
 #endif
 
@@ -241,22 +240,6 @@ int main(int argc, char *argv[])
 
             return EXIT_SUCCESS;
         }
-    }
-
-    // Check for SQLite plugin
-    // TODO: Specific to docset format and should be handled accordingly in the future
-    if (!QSqlDatabase::isDriverAvailable(QStringLiteral("QSQLITE"))) {
-        QScopedPointer<QMessageBox> msgBox(new QMessageBox());
-        msgBox->setWindowTitle(QStringLiteral("Zeal"));
-        msgBox->setIcon(QMessageBox::Critical);
-        msgBox->setText(QObject::tr("Qt SQLite driver is not available."));
-        msgBox->addButton(QMessageBox::Help);
-        QPushButton *quitButton = msgBox->addButton(QObject::tr("&Quit"),
-                                                    QMessageBox::DestructiveRole);
-        msgBox->setDefaultButton(quitButton);
-        if (msgBox->exec() == QMessageBox::Help)
-            QDesktopServices::openUrl(QUrl(contactUrl));
-        return EXIT_SUCCESS;
     }
 
     QDir::setSearchPaths(QStringLiteral("typeIcon"), {QStringLiteral(":/icons/type")});

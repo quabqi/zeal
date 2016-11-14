@@ -24,18 +24,17 @@
 #include "searchmodel.h"
 
 #include "docset.h"
+#include "itemdatarole.h"
 
-#include <QDir>
-
-using namespace Zeal;
+using namespace Zeal::Registry;
 
 SearchModel::SearchModel(QObject *parent) :
-    QAbstractItemModel(parent)
+    QAbstractListModel(parent)
 {
 }
 
 SearchModel::SearchModel(const SearchModel &other) :
-    QAbstractItemModel(other.d_ptr->parent),
+    QAbstractListModel(other.d_ptr->parent),
     m_dataList(other.m_dataList)
 {
 }
@@ -54,24 +53,16 @@ QVariant SearchModel::data(const QModelIndex &index, int role) const
 
     switch (role) {
     case Qt::DisplayRole:
-        switch (index.column()) {
-        case 0:
-            if (item->parentName.isEmpty())
-                return item->name;
-            else
-                return QString("%1 (%2)").arg(item->name, item->parentName);
-        case 1:
-            return QDir(item->docset->documentPath()).absoluteFilePath(item->path);
-        default:
-            return QVariant();
-        }
+        return item->name;
 
-    case Qt::DecorationRole: {
+    case Qt::DecorationRole:
         return item->docset->symbolTypeIcon(item->type);
-    }
 
     case ItemDataRole::DocsetIconRole:
         return item->docset->icon();
+
+    case ItemDataRole::UrlRole:
+        return item->url;
 
     default:
         return QVariant();
@@ -88,23 +79,11 @@ QModelIndex SearchModel::index(int row, int column, const QModelIndex &parent) c
     return createIndex(row, column, item);
 }
 
-QModelIndex SearchModel::parent(const QModelIndex &child) const
-{
-    Q_UNUSED(child)
-    return QModelIndex();
-}
-
 int SearchModel::rowCount(const QModelIndex &parent) const
 {
     if (!parent.isValid())
         return m_dataList.count();
     return 0;
-}
-
-int SearchModel::columnCount(const QModelIndex &parent) const
-{
-    Q_UNUSED(parent)
-    return 2;
 }
 
 bool SearchModel::removeRows(int row, int count, const QModelIndex &parent)

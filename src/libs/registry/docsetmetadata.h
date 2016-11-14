@@ -30,14 +30,13 @@
 #include <QUrl>
 
 namespace Zeal {
+namespace Registry {
 
 class DocsetMetadata
 {
 public:
     explicit DocsetMetadata();
     explicit DocsetMetadata(const QJsonObject &jsonObject);
-
-    QString sourceId() const;
 
     void save(const QString &path, const QString &version);
 
@@ -56,8 +55,6 @@ public:
     static DocsetMetadata fromDashFeed(const QUrl &feedUrl, const QByteArray &data);
 
 private:
-    QString m_sourceId;
-
     QString m_name;
     QString m_title;
     QStringList m_aliases;
@@ -74,6 +71,7 @@ private:
     QList<QUrl> m_urls;
 };
 
+} // namespace Registry
 } // namespace Zeal
 
 #endif // DOCSETMETADATA_H
