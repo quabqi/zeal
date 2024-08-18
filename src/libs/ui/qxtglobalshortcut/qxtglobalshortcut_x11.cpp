@@ -52,33 +52,44 @@
 
 #include "qxtglobalshortcut_p.h"
 
+#include <QGuiApplication>
 #include <QKeySequence>
 #include <QScopedPointer>
 #include <QVector>
-#include <QX11Info>
 
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+#include <QX11Info>
+#else
+#include <QtGui/private/qtx11extras_p.h>
+#endif
+
+#include <X11/Xlib.h>
 #include <xcb/xcb.h>
 #include <xcb/xcb_keysyms.h>
-#include <X11/Xlib.h>
 
 namespace {
-const QVector<quint32> maskModifiers = {
+constexpr quint32 maskModifiers[] = {
     0, XCB_MOD_MASK_2, XCB_MOD_MASK_LOCK, (XCB_MOD_MASK_2 | XCB_MOD_MASK_LOCK)
 };
 } // namespace
 
+bool QxtGlobalShortcutPrivate::isSupported()
+{
+    return QGuiApplication::platformName() == QLatin1String("xcb");
+}
+
 bool QxtGlobalShortcutPrivate::nativeEventFilter(const QByteArray &eventType,
-                                                 void *message, long *result)
+                                                 void *message, NativeEventFilterResult *result)
 {
     Q_UNUSED(result)
     if (eventType != "xcb_generic_event_t")
         return false;
 
-    xcb_generic_event_t *event = reinterpret_cast<xcb_generic_event_t*>(message);
+    auto event = static_cast<xcb_generic_event_t *>(message);
     if ((event->response_type & ~0x80) != XCB_KEY_PRESS)
         return false;
 
-    xcb_key_press_event_t *keyPressEvent = reinterpret_cast<xcb_key_press_event_t *>(event);
+    auto keyPressEvent = static_cast<xcb_key_press_event_t *>(message);
 
     // Avoid keyboard freeze
     xcb_connection_t *xcbConnection = QX11Info::connection();
@@ -147,7 +158,7 @@ bool QxtGlobalShortcutPrivate::registerShortcut(quint32 nativeKey, quint32 nativ
     }
 
     bool failed = false;
-    for (xcb_void_cookie_t cookie : xcbCookies) {
+    for (xcb_void_cookie_t cookie : std::as_const(xcbCookies)) {
         QScopedPointer<xcb_generic_error_t, QScopedPointerPodDeleter> error(xcb_request_check(xcbConnection, cookie));
         failed = !error.isNull();
     }
@@ -165,7 +176,6 @@ bool QxtGlobalShortcutPrivate::unregisterShortcut(quint32 nativeKey, quint32 nat
     QList<xcb_void_cookie_t> xcbCookies;
     for (quint32 maskMods : maskModifiers) {
         xcb_ungrab_key(xcbConnection, nativeKey, QX11Info::appRootWindow(), nativeMods | maskMods);
-
     }
 
     bool failed = false;

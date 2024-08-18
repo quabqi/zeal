@@ -1,32 +1,36 @@
 # C++ objects and libs
-
-*.slo
-*.lo
-*.o
 *.a
-*.la
-*.lai
-*.so
 *.dll
 *.dylib
+*.la
+*.lai
+*.lo
+*.o
+*.slo
+*.so
 
-# Qt-es
+# CMake
+build.*/
+build/
+CMakeLists.txt.user
+CMakeUserPresets.json
 
-/.qmake.cache
-/.qmake.stash
-*.pro.user
-*.pro.user.*
-*.moc
-moc_*.cpp
-qrc_*.cpp
-ui_*.h
-Makefile*
-*-build-*
+# AppImage Builder
+*.AppImage
+*.AppImage.zsync
+appimage-builder-cache/
+squashfs-root/
 
-# QtCreator
+# WiX Toolset
+*.msi
+*.wixobj
+*.wixpdb
 
+# Qt Creator
 *.autosave
 
-#QtCtreator Qml
-*.qmlproject.user
-*.qmlproject.user.*
+# VS Code
+.vscode/
+
+# Linux appdata
+/assets/freedesktop/org.zealdocs.zeal.appdata.xml

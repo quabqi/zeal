@@ -56,6 +56,12 @@
 #include <QAbstractNativeEventFilter>
 #include <QHash>
 
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+#define NativeEventFilterResult long
+#else
+#define NativeEventFilterResult qintptr
+#endif
+
 class QKeySequence;
 
 class QxtGlobalShortcut;
@@ -72,16 +78,16 @@ public:
     Qt::Key key = Qt::Key(0);
     Qt::KeyboardModifiers mods = Qt::NoModifier;
 
-#ifndef Q_OS_OSX
+#ifndef Q_OS_MACOS
     static int ref;
-#endif // Q_OS_OSX
+#endif // Q_OS_MACOS
 
     bool setShortcut(const QKeySequence &shortcut);
     bool unsetShortcut();
 
-    virtual bool nativeEventFilter(const QByteArray &eventType, void *message,
-                                   long *result) override;
+    bool nativeEventFilter(const QByteArray &eventType, void *message, NativeEventFilterResult *result) override;
 
+    static bool isSupported();
     static bool activateShortcut(quint32 nativeKey, quint32 nativeMods);
 
 private:

@@ -23,19 +23,18 @@
 #include "aboutdialog.h"
 #include "ui_aboutdialog.h"
 
-#include <QCoreApplication>
+#include <core/application.h>
 
-AboutDialog::AboutDialog(QWidget *parent) :
-    QDialog(parent),
-    ui(new Ui::AboutDialog)
+using namespace Zeal::WidgetUi;
+
+AboutDialog::AboutDialog(QWidget *parent)
+    : QDialog(parent)
+    , ui(new Ui::AboutDialog)
 {
     ui->setupUi(this);
     setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
 
-    const QString buildInfo
-            = tr("<b>Version:</b> %1<br>").arg(QCoreApplication::applicationVersion());
-
-    ui->buildInfoLabel->setText(buildInfo);
+    ui->versionLabel->setText(Core::Application::versionString());
     ui->buttonBox->setFocus(Qt::OtherFocusReason);
 }
 

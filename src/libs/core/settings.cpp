@@ -22,40 +22,47 @@
 
 #include "settings.h"
 
-#include <QCoreApplication>
+#include "application.h"
+
+#include <QApplication>
 #include <QDir>
+#include <QFileInfo>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QUrl>
 #include <QUuid>
-
-#ifdef USE_WEBENGINE
+#include <QWebEngineProfile>
 #include <QWebEngineSettings>
-typedef QWebEngineSettings QWebSettings;
+
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+#include <QStyleHints>
 #else
-#include <QWebSettings>
+#include <QPalette>
 #endif
 
 namespace {
 // Configuration file groups
-const char GroupBrowser[] = "browser";
-const char GroupDocsets[] = "docsets";
-const char GroupGlobalShortcuts[] = "global_shortcuts";
-const char GroupTabs[] = "tabs";
-const char GroupInternal[] = "internal";
-const char GroupState[] = "state";
-const char GroupProxy[] = "proxy";
-}
+constexpr char GroupContent[] = "content";
+constexpr char GroupDocsets[] = "docsets";
+constexpr char GroupGlobalShortcuts[] = "global_shortcuts";
+constexpr char GroupSearch[] = "search";
+constexpr char GroupTabs[] = "tabs";
+constexpr char GroupInternal[] = "internal";
+constexpr char GroupState[] = "state";
+constexpr char GroupProxy[] = "proxy";
+} // namespace
 
 using namespace Zeal::Core;
 
-Settings::Settings(QObject *parent) :
-    QObject(parent)
+Settings::Settings(QObject *parent)
+    : QObject(parent)
 {
-    // TODO: Move to user style sheet (related to #268)
-#ifndef USE_WEBENGINE
-    QWebSettings::globalSettings()
-            ->setUserStyleSheetUrl(QUrl(QStringLiteral("qrc:///browser/highlight.css")));
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+    qRegisterMetaTypeStreamOperators<ContentAppearance>("ContentAppearance");
+    qRegisterMetaTypeStreamOperators<ExternalLinkPolicy>("ExternalLinkPolicy");
+#else
+    qRegisterMetaType<ContentAppearance>("ContentAppearance");
+    qRegisterMetaType<ExternalLinkPolicy>("ExternalLinkPolicy");
 #endif
 
     load();
@@ -64,6 +71,34 @@ Settings::Settings(QObject *parent) :
 Settings::~Settings()
 {
     save();
+}
+
+bool Settings::isDarkModeEnabled() const
+{
+    if (contentAppearance == ContentAppearance::Dark) {
+        return true;
+    }
+
+    if (contentAppearance == ContentAppearance::Automatic && colorScheme() == ColorScheme::Dark) {
+        return true;
+    }
+
+    return false;
+}
+
+Zeal::Core::Settings::ColorScheme Settings::colorScheme()
+{
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+    return QApplication::styleHints()->colorScheme();
+#else
+    // Pre Qt 6.5 detection from https://www.qt.io/blog/dark-mode-on-windows-11-with-qt-6.5.
+    const QPalette p;
+    if (p.color(QPalette::WindowText).lightness() > p.color(QPalette::Window).lightness()) {
+        return ColorScheme::Dark;
+    }
+
+    return ColorScheme::Light;
+#endif
 }
 
 void Settings::load()
@@ -87,20 +122,79 @@ void Settings::load()
     openNewTabAfterActive = settings->value(QStringLiteral("open_new_tab_after_active"), false).toBool();
     settings->endGroup();
 
-    settings->beginGroup(GroupBrowser);
+    settings->beginGroup(GroupSearch);
+    isFuzzySearchEnabled = settings->value(QStringLiteral("fuzzy_search_enabled"), false).toBool();
+    settings->endGroup();
+
+    settings->beginGroup(GroupContent);
+
+    contentAppearance = settings->value(QStringLiteral("appearance"),
+                                        QVariant::fromValue(ContentAppearance::Automatic)).value<ContentAppearance>();
+
+#if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0) && QT_VERSION < QT_VERSION_CHECK(6, 7, 0)
+    // Dark mode needs to be applied before Qt WebEngine is initialized.
+    if (isDarkModeEnabled()) {
+        qputenv("QTWEBENGINE_CHROMIUM_FLAGS", "--blink-settings=forceDarkModeEnabled=true,darkModeInversionAlgorithm=4");
+    }
+#endif
+
+    // Fonts
+    QWebEngineSettings *webSettings = QWebEngineProfile::defaultProfile()->settings();
+    serifFontFamily = settings->value(QStringLiteral("serif_font_family"),
+                                      webSettings->fontFamily(QWebEngineSettings::SerifFont)).toString();
+    sansSerifFontFamily = settings->value(QStringLiteral("sans_serif_font_family"),
+                                          webSettings->fontFamily(QWebEngineSettings::SansSerifFont)).toString();
+    fixedFontFamily = settings->value(QStringLiteral("fixed_font_family"),
+                                      webSettings->fontFamily(QWebEngineSettings::FixedFont)).toString();
+
+    static const QMap<QString, QWebEngineSettings::FontFamily> fontFamilies = {
+        {QStringLiteral("sans-serif"), QWebEngineSettings::SansSerifFont},
+        {QStringLiteral("serif"), QWebEngineSettings::SerifFont},
+        {QStringLiteral("monospace"), QWebEngineSettings::FixedFont}
+    };
+
+    defaultFontFamily = settings->value(QStringLiteral("default_font_family"),
+                                        QStringLiteral("serif")).toString();
+
+    // Fallback to the serif font family.
+    if (!fontFamilies.contains(defaultFontFamily)) {
+        defaultFontFamily = QStringLiteral("serif");
+    }
+
+    webSettings->setFontFamily(QWebEngineSettings::SansSerifFont, sansSerifFontFamily);
+    webSettings->setFontFamily(QWebEngineSettings::SerifFont, serifFontFamily);
+    webSettings->setFontFamily(QWebEngineSettings::FixedFont, fixedFontFamily);
+
+    const QString defaultFontFamilyResolved = webSettings->fontFamily(fontFamilies.value(defaultFontFamily));
+    webSettings->setFontFamily(QWebEngineSettings::StandardFont, defaultFontFamilyResolved);
+
+    defaultFontSize = settings->value(QStringLiteral("default_font_size"),
+                                      webSettings->fontSize(QWebEngineSettings::DefaultFontSize)).toInt();
+    defaultFixedFontSize = settings->value(QStringLiteral("default_fixed_font_size"),
+                                           webSettings->fontSize(QWebEngineSettings::DefaultFixedFontSize)).toInt();
     minimumFontSize = settings->value(QStringLiteral("minimum_font_size"),
-                                        QWebSettings::globalSettings()->fontSize(QWebSettings::MinimumFontSize)).toInt();
-    QWebSettings::globalSettings()->setFontSize(QWebSettings::MinimumFontSize, minimumFontSize);
+                                      webSettings->fontSize(QWebEngineSettings::MinimumFontSize)).toInt();
+
+    webSettings->setFontSize(QWebEngineSettings::DefaultFontSize, defaultFontSize);
+    webSettings->setFontSize(QWebEngineSettings::DefaultFixedFontSize, defaultFixedFontSize);
+    webSettings->setFontSize(QWebEngineSettings::MinimumFontSize, minimumFontSize);
+
+    isHighlightOnNavigateEnabled = settings->value(QStringLiteral("highlight_on_navigate"), true).toBool();
+    customCssFile = settings->value(QStringLiteral("custom_css_file")).toString();
+    externalLinkPolicy = settings->value(QStringLiteral("external_link_policy"),
+                                         QVariant::fromValue(ExternalLinkPolicy::Ask)).value<ExternalLinkPolicy>();
+    isSmoothScrollingEnabled = settings->value(QStringLiteral("smooth_scrolling"), true).toBool();
     settings->endGroup();
 
     settings->beginGroup(GroupProxy);
     proxyType = static_cast<ProxyType>(settings->value(QStringLiteral("type"),
-                                                         ProxyType::System).toUInt());
+                                                       ProxyType::System).toUInt());
     proxyHost = settings->value(QStringLiteral("host")).toString();
     proxyPort = static_cast<quint16>(settings->value(QStringLiteral("port"), 0).toUInt());
     proxyAuthenticate = settings->value(QStringLiteral("authenticate"), false).toBool();
     proxyUserName = settings->value(QStringLiteral("username")).toString();
     proxyPassword = settings->value(QStringLiteral("password")).toString();
+    isIgnoreSslErrorsEnabled = settings->value(QStringLiteral("ignore_ssl_errors"), false).toBool();
     settings->endGroup();
 
     settings->beginGroup(GroupDocsets);
@@ -108,14 +202,24 @@ void Settings::load()
         docsetPath = settings->value(QStringLiteral("path")).toString();
     } else {
 #ifndef PORTABLE_BUILD
-        docsetPath = QStandardPaths::writableLocation(QStandardPaths::DataLocation)
+        docsetPath = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)
                 + QLatin1String("/docsets");
 #else
-        docsetPath = QCoreApplication::applicationDirPath() + QLatin1String("/docsets");
+        docsetPath = QStringLiteral("docsets");
 #endif
-        QDir().mkpath(docsetPath);
     }
     settings->endGroup();
+
+    // Create the docset storage directory if it doesn't exist.
+    const QFileInfo fi(docsetPath);
+    if (!fi.exists()) {
+        // TODO: Report QDir::mkpath() errors.
+        if (fi.isRelative()) {
+            QDir().mkpath(QCoreApplication::applicationDirPath() + "/" + docsetPath);
+        } else {
+            QDir().mkpath(docsetPath);
+        }
+    }
 
     settings->beginGroup(GroupState);
     windowGeometry = settings->value(QStringLiteral("window_geometry")).toByteArray();
@@ -125,8 +229,8 @@ void Settings::load()
 
     settings->beginGroup(GroupInternal);
     installId = settings->value(QStringLiteral("install_id"),
-                                  // Avoid curly braces (QTBUG-885)
-                                  QUuid::createUuid().toString().mid(1, 36)).toString();
+                                // Avoid curly braces (QTBUG-885)
+                                QUuid::createUuid().toString().mid(1, 36)).toString();
     settings->endGroup();
 }
 
@@ -150,8 +254,25 @@ void Settings::save()
     settings->setValue(QStringLiteral("open_new_tab_after_active"), openNewTabAfterActive);
     settings->endGroup();
 
-    settings->beginGroup(GroupBrowser);
+    settings->beginGroup(GroupSearch);
+    settings->setValue(QStringLiteral("fuzzy_search_enabled"), isFuzzySearchEnabled);
+    settings->endGroup();
+
+    settings->beginGroup(GroupContent);
+    settings->setValue(QStringLiteral("default_font_family"), defaultFontFamily);
+    settings->setValue(QStringLiteral("serif_font_family"), serifFontFamily);
+    settings->setValue(QStringLiteral("sans_serif_font_family"), sansSerifFontFamily);
+    settings->setValue(QStringLiteral("fixed_font_family"), fixedFontFamily);
+
+    settings->setValue(QStringLiteral("default_font_size"), defaultFontSize);
+    settings->setValue(QStringLiteral("default_fixed_font_size"), defaultFixedFontSize);
     settings->setValue(QStringLiteral("minimum_font_size"), minimumFontSize);
+
+    settings->setValue(QStringLiteral("appearance"), QVariant::fromValue(contentAppearance));
+    settings->setValue(QStringLiteral("highlight_on_navigate"), isHighlightOnNavigateEnabled);
+    settings->setValue(QStringLiteral("custom_css_file"), customCssFile);
+    settings->setValue(QStringLiteral("external_link_policy"), QVariant::fromValue(externalLinkPolicy));
+    settings->setValue(QStringLiteral("smooth_scrolling"), isSmoothScrollingEnabled);
     settings->endGroup();
 
     settings->beginGroup(GroupProxy);
@@ -161,6 +282,7 @@ void Settings::save()
     settings->setValue(QStringLiteral("authenticate"), proxyAuthenticate);
     settings->setValue(QStringLiteral("username"), proxyUserName);
     settings->setValue(QStringLiteral("password"), proxyPassword);
+    settings->setValue(QStringLiteral("ignore_ssl_errors"), isIgnoreSslErrorsEnabled);
     settings->endGroup();
 
     settings->beginGroup(GroupDocsets);
@@ -176,7 +298,7 @@ void Settings::save()
     settings->beginGroup(GroupInternal);
     settings->setValue(QStringLiteral("install_id"), installId);
     // Version of configuration file format, should match Zeal version. Used for migration rules.
-    settings->setValue(QStringLiteral("version"), QCoreApplication::applicationVersion());
+    settings->setValue(QStringLiteral("version"), Application::version().toString());
     settings->endGroup();
 
     settings->sync();
@@ -195,15 +317,45 @@ void Settings::save()
 void Settings::migrate(QSettings *settings) const
 {
     settings->beginGroup(GroupInternal);
-    const QString version = settings->value(QStringLiteral("version")).toString();
+    const auto version = QVersionNumber::fromString(settings->value(QStringLiteral("version")).toString());
     settings->endGroup();
+
+    //
+    // 0.6.0
+    //
+
+    // Unset content.default_fixed_font_size.
+    // The causing bug was 0.6.1 (#903), but the incorrect setting still comes to haunt us (#1054).
+    if (version == QVersionNumber(0, 6, 0)) {
+        settings->beginGroup(GroupContent);
+        settings->remove(QStringLiteral("default_fixed_font_size"));
+        settings->endGroup();
+    }
+
+    //
+    // Pre 0.4
+    //
+
+    // Rename 'browser' group into 'content'.
+    if (version < QVersionNumber(0, 4, 0)) {
+        settings->beginGroup(QStringLiteral("browser"));
+        const QVariant tmpMinimumFontSize = settings->value(QStringLiteral("minimum_font_size"));
+        settings->endGroup();
+        settings->remove(QStringLiteral("browser"));
+
+        if (tmpMinimumFontSize.isValid()) {
+            settings->beginGroup(GroupContent);
+            settings->setValue(QStringLiteral("minimum_font_size"), tmpMinimumFontSize);
+            settings->endGroup();
+        }
+    }
 
     //
     // Pre 0.3
     //
 
     // Unset 'state/splitter_geometry', because custom styles were removed.
-    if (version.isEmpty() || version.startsWith(QLatin1String("0.2"))) {
+    if (version < QVersionNumber(0, 3, 0)) {
         settings->beginGroup(GroupState);
         settings->remove(QStringLiteral("splitter_geometry"));
         settings->endGroup();
@@ -227,4 +379,32 @@ QSettings *Settings::qsettings(QObject *parent)
     return new QSettings(QCoreApplication::applicationDirPath() + QLatin1String("/zeal.ini"),
                          QSettings::IniFormat, parent);
 #endif
+}
+
+QDataStream &operator<<(QDataStream &out, Settings::ContentAppearance policy)
+{
+    out << static_cast<std::underlying_type<Settings::ContentAppearance>::type>(policy);
+    return out;
+}
+
+QDataStream &operator>>(QDataStream &in, Settings::ContentAppearance &policy)
+{
+    std::underlying_type<Settings::ContentAppearance>::type value;
+    in >> value;
+    policy = static_cast<Settings::ContentAppearance>(value);
+    return in;
+}
+
+QDataStream &operator<<(QDataStream &out, Settings::ExternalLinkPolicy policy)
+{
+    out << static_cast<std::underlying_type<Settings::ExternalLinkPolicy>::type>(policy);
+    return out;
+}
+
+QDataStream &operator>>(QDataStream &in, Settings::ExternalLinkPolicy &policy)
+{
+    std::underlying_type<Settings::ExternalLinkPolicy>::type value;
+    in >> value;
+    policy = static_cast<Settings::ExternalLinkPolicy>(value);
+    return in;
 }

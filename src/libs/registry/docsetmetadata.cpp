@@ -27,14 +27,13 @@
 #include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
+#if QT_VERSION >= QT_VERSION_CHECK(5, 10, 0)
+#include <QRandomGenerator>
+#endif
 #include <QVariant>
 #include <QXmlStreamReader>
 
 using namespace Zeal::Registry;
-
-DocsetMetadata::DocsetMetadata()
-{
-}
 
 DocsetMetadata::DocsetMetadata(const QJsonObject &jsonObject)
 {
@@ -46,24 +45,29 @@ DocsetMetadata::DocsetMetadata(const QJsonObject &jsonObject)
 
     m_rawIcon2x = QByteArray::fromBase64(jsonObject[QStringLiteral("icon2x")].toString()
             .toLocal8Bit());
-    // TODO: Check on a high-resolution screen
     if (qApp->devicePixelRatio() > 1.0) {
         QPixmap pixmap = QPixmap::fromImage(QImage::fromData(m_rawIcon2x));
         pixmap.setDevicePixelRatio(2.0);
         m_icon.addPixmap(pixmap);
     }
 
-    for (const QJsonValue &vv : jsonObject[QStringLiteral("aliases")].toArray())
+    for (const QJsonValueRef vv : jsonObject[QStringLiteral("aliases")].toArray()) {
         m_aliases << vv.toString();
+    }
 
-    for (const QJsonValue &vv : jsonObject[QStringLiteral("versions")].toArray())
+    for (const QJsonValueRef vv : jsonObject[QStringLiteral("versions")].toArray()) {
         m_versions << vv.toString();
-    m_revision = jsonObject[QStringLiteral("revision")].toString();
+    }
+
+    // Unfortunately, API returns revision as a string, so it needs to be converted to integer
+    // for comparison to work properly.
+    m_revision = jsonObject[QStringLiteral("revision")].toString().toInt();
 
     m_feedUrl = QUrl(jsonObject[QStringLiteral("feed_url")].toString());
-    const QJsonArray urlArray = jsonObject[QStringLiteral("urls")].toArray();
-    for (const QJsonValue &url : urlArray)
-        m_urls.append(QUrl(url.toString()));
+
+    for (const QJsonValueRef vv : jsonObject[QStringLiteral("urls")].toArray()) {
+        m_urls.append(QUrl(vv.toString()));
+    }
 
     m_extra = jsonObject[QStringLiteral("extra")].toObject();
 }
@@ -85,16 +89,18 @@ void DocsetMetadata::save(const QString &path, const QString &version)
     if (!version.isEmpty())
         jsonObject[QStringLiteral("version")] = version;
 
-    if (version == latestVersion() && !m_revision.isEmpty())
-        jsonObject[QStringLiteral("revision")] = m_revision;
+    if (version == latestVersion() && m_revision > 0)
+        jsonObject[QStringLiteral("revision")] = QString::number(m_revision);
 
     if (!m_feedUrl.isEmpty())
         jsonObject[QStringLiteral("feed_url")] = m_feedUrl.toString();
 
     if (!m_urls.isEmpty()) {
         QJsonArray urls;
-        for (const QUrl &url : m_urls)
+        for (const QUrl &url : std::as_const(m_urls)) {
             urls.append(url.toString());
+        }
+
         jsonObject[QStringLiteral("urls")] = urls;
     }
 
@@ -151,7 +157,7 @@ QString DocsetMetadata::latestVersion() const
     return m_versions.isEmpty() ? QString() : m_versions.first();
 }
 
-QString DocsetMetadata::revision() const
+int DocsetMetadata::revision() const
 {
     return m_revision;
 }
@@ -163,7 +169,11 @@ QUrl DocsetMetadata::feedUrl() const
 
 QUrl DocsetMetadata::url() const
 {
+#if QT_VERSION >= QT_VERSION_CHECK(5, 10, 0)
+    return m_urls.at(QRandomGenerator::global()->bounded(m_urls.size()));
+#else
     return m_urls.at(qrand() % m_urls.size());
+#endif
 }
 
 QList<QUrl> DocsetMetadata::urls() const
@@ -176,7 +186,11 @@ DocsetMetadata DocsetMetadata::fromDashFeed(const QUrl &feedUrl, const QByteArra
     DocsetMetadata metadata;
 
     metadata.m_name = feedUrl.fileName();
-    metadata.m_name.chop(4); // Strip ".xml" extension
+
+    // Strip ".xml" extension if any.
+    if (metadata.m_name.endsWith(QLatin1String(".xml"))) {
+        metadata.m_name.chop(4);
+    }
 
     metadata.m_title = metadata.m_name;
     metadata.m_title.replace(QLatin1Char('_'), QLatin1Char(' '));
@@ -187,7 +201,7 @@ DocsetMetadata DocsetMetadata::fromDashFeed(const QUrl &feedUrl, const QByteArra
 
     while (!xml.atEnd()) {
         const QXmlStreamReader::TokenType token = xml.readNext();
-        if (token == QXmlStreamReader::StartDocument || token != QXmlStreamReader::StartElement)
+        if (token != QXmlStreamReader::StartElement)
             continue;
 
         // Try to pull out the relevant data

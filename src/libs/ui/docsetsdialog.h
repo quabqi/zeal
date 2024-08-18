@@ -21,10 +21,11 @@
 **
 ****************************************************************************/
 
-#ifndef DOCSETSDIALOG_H
-#define DOCSETSDIALOG_H
+#ifndef ZEAL_WIDGETUI_DOCSETSDIALOG_H
+#define ZEAL_WIDGETUI_DOCSETSDIALOG_H
 
 #include <registry/docsetmetadata.h>
+#include <util/caseinsensitivemap.h>
 
 #include <QDialog>
 #include <QHash>
@@ -34,10 +35,6 @@ class QListWidgetItem;
 class QNetworkReply;
 class QTemporaryFile;
 class QUrl;
-
-namespace Ui {
-class DocsetsDialog;
-}
 
 namespace Zeal {
 
@@ -49,14 +46,18 @@ namespace Core {
 class Application;
 }
 
+namespace WidgetUi {
+
+namespace Ui {
+class DocsetsDialog;
+} // namespace Ui
+
 class DocsetsDialog : public QDialog
 {
     Q_OBJECT
 public:
     explicit DocsetsDialog(Core::Application *app, QWidget *parent = nullptr);
     ~DocsetsDialog() override;
-
-    void reject() override;
 
 private slots:
     void addDashFeed();
@@ -87,16 +88,21 @@ private:
     Core::Application *m_application = nullptr;
     Registry::DocsetRegistry *m_docsetRegistry = nullptr;
 
+    bool m_isStorageReadOnly = false;
+
     QList<QNetworkReply *> m_replies;
-    qint64 m_combinedTotal = 0;
-    qint64 m_combinedReceived = 0;
 
     // TODO: Create a special model
-    QMap<QString, Registry::DocsetMetadata> m_availableDocsets;
+    Util::CaseInsensitiveMap<Registry::DocsetMetadata> m_availableDocsets;
     QMap<QString, Registry::DocsetMetadata> m_userFeeds;
 
     QHash<QString, QTemporaryFile *> m_tmpFiles;
-    QStringList m_docsetsBeingDeleted;
+
+    void setupInstalledDocsetsTab();
+    void setupAvailableDocsetsTab();
+
+    void enableControls();
+    void disableControls();
 
     QListWidgetItem *findDocsetListItem(const QString &name) const;
     bool updatesAvailable() const;
@@ -104,14 +110,14 @@ private:
     QNetworkReply *download(const QUrl &url);
     void cancelDownloads();
 
+    void loadUserFeedList();
     void downloadDocsetList();
     void processDocsetList(const QJsonArray &list);
 
     void downloadDashDocset(const QModelIndex &index);
     void removeDocset(const QString &name);
 
-    void updateCombinedProgress();
-    void resetProgress();
+    void updateStatus();
 
     // FIXME: Come up with a better approach
     QString docsetNameForTmpFilePath(const QString &filePath) const;
@@ -119,8 +125,10 @@ private:
     static inline int percent(qint64 fraction, qint64 total);
 
     static QString cacheLocation(const QString &fileName);
+    static bool isDirWritable(const QString &path);
 };
 
+} // namespace WidgetUi
 } // namespace Zeal
 
-#endif // DOCSETSDIALOG_H
+#endif // ZEAL_WIDGETUI_DOCSETSDIALOG_H

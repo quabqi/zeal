@@ -21,9 +21,10 @@
 **
 ****************************************************************************/
 
-#ifndef SEARCHQUERY_H
-#define SEARCHQUERY_H
+#ifndef ZEAL_REGISTRY_SEARCHQUERY_H
+#define ZEAL_REGISTRY_SEARCHQUERY_H
 
+#include <QDataStream>
 #include <QStringList>
 
 namespace Zeal {
@@ -35,8 +36,8 @@ namespace Registry {
 class SearchQuery
 {
 public:
-    explicit SearchQuery();
-    explicit SearchQuery(const QString &query, const QStringList &keywords = QStringList());
+    explicit SearchQuery() = default;
+    explicit SearchQuery(QString query, const QStringList &keywords = QStringList());
 
     /// Creates a search query from a string. Single separator will be
     /// used to contstruct docset filter, but separator repeated twice
@@ -66,8 +67,7 @@ public:
     /// Returns true if there's a docset filter for the given query
     bool hasKeywords() const;
 
-    /// Returns true if the docset prefix match the ones given on query
-    bool hasKeyword(const QString &keyword) const;
+    /// Returns true if one the query contains one of the @c keywords.
     bool hasKeywords(const QStringList &keywords) const;
 
     /// Returns the docset filter raw size for the given query
@@ -88,4 +88,4 @@ private:
 QDataStream &operator<<(QDataStream &out, const Zeal::Registry::SearchQuery &query);
 QDataStream &operator>>(QDataStream &in, Zeal::Registry::SearchQuery &query);
 
-#endif // SEARCHQUERY_H
+#endif // ZEAL_REGISTRY_SEARCHQUERY_H

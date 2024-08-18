@@ -27,10 +27,13 @@
 #include <QFontMetrics>
 #include <QHelpEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QToolTip>
 
-SearchItemDelegate::SearchItemDelegate(QObject *parent) :
-    QStyledItemDelegate(parent)
+using namespace Zeal::WidgetUi;
+
+SearchItemDelegate::SearchItemDelegate(QObject *parent)
+    : QStyledItemDelegate(parent)
 {
 }
 
@@ -93,18 +96,22 @@ void SearchItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &op
             mode = QIcon::Disabled;
         else if (opt.state & QStyle::State_Selected)
             mode = QIcon::Selected;
-        const QIcon::State state = opt.state & QStyle::State_Open ? QIcon::On : QIcon::Off;
+        const QIcon::State state = (opt.state & QStyle::State_Open) ? QIcon::On : QIcon::Off;
 
         // All icons are sized after the first one.
         QRect iconRect = style->subElementRect(QStyle::SE_ItemViewItemDecoration, &opt, opt.widget);
+        // Undo RTL mirroring
+        iconRect = style->visualRect(opt.direction, opt.rect, iconRect);
         const int dx = iconRect.width() + margin;
 
         for (int i = 1; i < roles.size(); ++i) {
             opt.decorationSize.rwidth() += dx;
             iconRect.translate(dx, 0);
+            // Redo RTL mirroring
+            const auto iconVisualRect = style->visualRect(opt.direction, opt.rect, iconRect);
 
             const QIcon icon = index.data(roles[i]).value<QIcon>();
-            icon.paint(painter, iconRect, opt.decorationAlignment, mode, state);
+            icon.paint(painter, iconVisualRect, opt.decorationAlignment, mode, state);
         }
     }
 
@@ -125,7 +132,8 @@ void SearchItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &op
         painter->setRenderHint(QPainter::Antialiasing);
         painter->setPen(QColor::fromRgb(255, 253, 0));
 
-        const QColor highlightColor = opt.state & (QStyle::State_Selected | QStyle::State_HasFocus)
+        const QColor highlightColor
+                = (opt.state & (QStyle::State_Selected | QStyle::State_HasFocus))
                 ? QColor::fromRgb(255, 255, 100, 20) : QColor::fromRgb(255, 255, 100, 120);
 
         for (int i = 0;;) {
@@ -133,9 +141,13 @@ void SearchItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &op
             if (matchIndex == -1 || matchIndex >= elidedText.length() - 1)
                 break;
 
-            QRect highlightRect
-                    = textRect.adjusted(fm.width(elidedText.left(matchIndex)), 2, 0, -2);
+#if QT_VERSION >= QT_VERSION_CHECK(5, 11, 0)
+            QRect highlightRect = textRect.adjusted(fm.horizontalAdvance(elidedText.left(matchIndex)), 2, 0, -2);
+            highlightRect.setWidth(fm.horizontalAdvance(elidedText.mid(matchIndex, m_highlight.length())));
+#else
+            QRect highlightRect = textRect.adjusted(fm.width(elidedText.left(matchIndex)), 2, 0, -2);
             highlightRect.setWidth(fm.width(elidedText.mid(matchIndex, m_highlight.length())));
+#endif
 
             QPainterPath path;
             path.addRoundedRect(highlightRect, 2, 2);
@@ -159,7 +171,7 @@ void SearchItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &op
     }
 #endif
 
-    const QPalette::ColorGroup cg = opt.state & QStyle::State_Active
+    const QPalette::ColorGroup cg = (opt.state & QStyle::State_Active)
             ? QPalette::Normal : QPalette::Inactive;
 
     if (opt.state & QStyle::State_Selected)
@@ -167,10 +179,13 @@ void SearchItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &op
     else
         painter->setPen(opt.palette.color(cg, QPalette::Text));
 
+    // Constant LeftToRight because we don't need to flip it any further.
     // Vertically align the text in the middle to match QCommonStyle behaviour.
-    const QRect alignedRect = QStyle::alignedRect(opt.direction, opt.displayAlignment,
-                                                  QSize(1, fm.height()), textRect);
-    painter->drawText(QPoint(alignedRect.x(), alignedRect.y() + fm.ascent()), elidedText);
+    const auto alignedRect = QStyle::alignedRect(Qt::LeftToRight, opt.displayAlignment,
+                                                 QSize(textRect.size().width(), fm.height()), textRect);
+    const auto textPoint = QPoint(alignedRect.x(), alignedRect.y() + fm.ascent());
+    // Force LTR, so that BiDi won't reorder ellipsis to the left.
+    painter->drawText(textPoint, elidedText, Qt::TextFlag::TextForceLeftToRight, 0);
     painter->restore();
 }
 
@@ -199,8 +214,11 @@ QSize SearchItemDelegate::sizeHint(const QStyleOptionViewItem &option,
         const int decorationWidth = std::min(opt.decorationSize.width(), actualSize.width());
         size.rwidth() = (decorationWidth + margin) * roles.size() + margin;
     }
-
+#if QT_VERSION >= QT_VERSION_CHECK(5, 11, 0)
+    size.rwidth() += opt.fontMetrics.horizontalAdvance(index.data().toString()) + margin * 2;
+#else
     size.rwidth() += opt.fontMetrics.width(index.data().toString()) + margin * 2;
+#endif
     return size;
 }
 

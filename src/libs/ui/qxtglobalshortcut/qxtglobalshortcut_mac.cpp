@@ -52,12 +52,13 @@
 
 #include "qxtglobalshortcut_p.h"
 
-#include <QApplication>
+#include <QGuiApplication>
 #include <QHash>
 #include <QMap>
 
 #include <Carbon/Carbon.h>
 
+namespace {
 typedef QPair<uint, uint> Identifier;
 static QMap<quint32, EventHotKeyRef> keyRefs;
 static QHash<Identifier, quint32> keyIDs;
@@ -74,11 +75,18 @@ OSStatus qxt_mac_handle_hot_key(EventHandlerCallRef nextHandler, EventRef event,
         Identifier id = keyIDs.key(keyID.id);
         QxtGlobalShortcutPrivate::activateShortcut(id.second, id.first);
     }
+
     return noErr;
 }
+} // namespace
 
-bool QxtGlobalShortcutPrivate::nativeEventFilter(const QByteArray & eventType,
-                                                 void *message, long *result)
+bool QxtGlobalShortcutPrivate::isSupported()
+{
+    return QGuiApplication::platformName() == QLatin1String("cocoa");
+}
+
+bool QxtGlobalShortcutPrivate::nativeEventFilter(const QByteArray &eventType,
+                                                 void *message, NativeEventFilterResult *result)
 {
     Q_UNUSED(eventType)
     Q_UNUSED(message)
@@ -220,7 +228,7 @@ quint32 QxtGlobalShortcutPrivate::nativeKeycode(Qt::Key key)
     UCKeyboardLayout *header = (UCKeyboardLayout *)CFDataGetBytePtr(currentLayoutData);
     UCKeyboardTypeHeader *table = header->keyboardTypeList;
 
-    uint8_t *data = (uint8_t*)header;
+    uint8_t *data = (uint8_t *)header;
     // God, would a little documentation for this shit kill you...
     for (quint32 i = 0; i < header->keyboardTypeCount; ++i) {
         UCKeyStateRecordsIndex *stateRec = 0;
@@ -233,9 +241,9 @@ quint32 QxtGlobalShortcutPrivate::nativeKeycode(Qt::Key key)
         if (charTable->keyToCharTableIndexFormat != kUCKeyToCharTableIndexFormat)
             continue;
 
-        for (quint32 j=0; j < charTable->keyToCharTableCount; ++j) {
+        for (quint32 j = 0; j < charTable->keyToCharTableCount; ++j) {
             UCKeyOutput *keyToChar = reinterpret_cast<UCKeyOutput *>(data + charTable->keyToCharTableOffsets[j]);
-            for (quint32 k=0; k < charTable->keyToCharTableSize; ++k) {
+            for (quint32 k = 0; k < charTable->keyToCharTableSize; ++k) {
                 if (keyToChar[k] & kUCKeyOutputTestForIndexMask) {
                     long idx = keyToChar[k] & kUCKeyOutputGetIndexMask;
                     if (stateRec && idx < stateRec->keyStateRecordCount) {

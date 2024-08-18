@@ -28,11 +28,15 @@
 namespace Zeal {
 namespace Core {
 
-class NetworkAccessManager : public QNetworkAccessManager
+class NetworkAccessManager final : public QNetworkAccessManager
 {
     Q_OBJECT
+    Q_DISABLE_COPY(NetworkAccessManager)
 public:
     NetworkAccessManager(QObject *parent = nullptr);
+
+    static bool isLocalFile(const QUrl &url);
+    static bool isLocalUrl(const QUrl &url);
 
 protected:
     QNetworkReply *createRequest(Operation op, const QNetworkRequest &request,

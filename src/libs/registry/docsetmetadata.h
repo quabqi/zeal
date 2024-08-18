@@ -21,8 +21,8 @@
 **
 ****************************************************************************/
 
-#ifndef DOCSETMETADATA_H
-#define DOCSETMETADATA_H
+#ifndef ZEAL_REGISTRY_DOCSETMETADATA_H
+#define ZEAL_REGISTRY_DOCSETMETADATA_H
 
 #include <QIcon>
 #include <QJsonObject>
@@ -35,7 +35,7 @@ namespace Registry {
 class DocsetMetadata
 {
 public:
-    explicit DocsetMetadata();
+    explicit DocsetMetadata() = default;
     explicit DocsetMetadata(const QJsonObject &jsonObject);
 
     void save(const QString &path, const QString &version);
@@ -45,7 +45,7 @@ public:
     QStringList aliases() const;
     QStringList versions() const;
     QString latestVersion() const;
-    QString revision() const;
+    int revision() const;
     QIcon icon() const;
 
     QUrl feedUrl() const;
@@ -59,7 +59,7 @@ private:
     QString m_title;
     QStringList m_aliases;
     QStringList m_versions;
-    QString m_revision;
+    int m_revision = 0;
 
     QByteArray m_rawIcon;
     QByteArray m_rawIcon2x;
@@ -74,4 +74,4 @@ private:
 } // namespace Registry
 } // namespace Zeal
 
-#endif // DOCSETMETADATA_H
+#endif // ZEAL_REGISTRY_DOCSETMETADATA_H

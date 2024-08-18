@@ -23,13 +23,14 @@
 #include "application.h"
 
 #include "extractor.h"
+#include "filemanager.h"
+#include "httpserver.h"
 #include "networkaccessmanager.h"
 #include "settings.h"
 
 #include <registry/docsetregistry.h>
 #include <registry/searchquery.h>
 #include <ui/mainwindow.h>
-#include <util/version.h>
 
 #include <QCoreApplication>
 #include <QJsonArray>
@@ -39,6 +40,7 @@
 #include <QNetworkProxy>
 #include <QNetworkReply>
 #include <QScopedPointer>
+#include <QStandardPaths>
 #include <QSysInfo>
 #include <QThread>
 
@@ -46,13 +48,13 @@ using namespace Zeal;
 using namespace Zeal::Core;
 
 namespace {
-const char ReleasesApiUrl[] = "http://api.zealdocs.org/v1/releases";
-}
+constexpr char ReleasesApiUrl[] = "https://api.zealdocs.org/v1/releases";
+} // namespace
 
 Application *Application::m_instance = nullptr;
 
-Application::Application(QObject *parent) :
-    QObject(parent)
+Application::Application(QObject *parent)
+    : QObject(parent)
 {
     // Ensure only one instance of Application
     Q_ASSERT(!m_instance);
@@ -60,6 +62,16 @@ Application::Application(QObject *parent) :
 
     m_settings = new Settings(this);
     m_networkManager = new NetworkAccessManager(this);
+
+    m_fileManager = new FileManager(this);
+    m_httpServer = new HttpServer(this);
+
+    connect(m_networkManager, &QNetworkAccessManager::sslErrors,
+            this, [this](QNetworkReply *reply, const QList<QSslError> &errors) {
+        if (m_settings->isIgnoreSslErrorsEnabled) {
+            reply->ignoreSslErrors();
+        }
+    });
 
     // Extractor setup
     m_extractorThread = new QThread(this);
@@ -70,13 +82,12 @@ Application::Application(QObject *parent) :
     connect(m_extractor, &Extractor::error, this, &Application::extractionError);
     connect(m_extractor, &Extractor::progress, this, &Application::extractionProgress);
 
+    m_docsetRegistry = new Registry::DocsetRegistry();
+
     connect(m_settings, &Settings::updated, this, &Application::applySettings);
     applySettings();
 
-    m_docsetRegistry = new Registry::DocsetRegistry();
-    m_docsetRegistry->init(m_settings->docsetPath);
-
-    m_mainWindow = new MainWindow(this);
+    m_mainWindow = new WidgetUi::MainWindow(this);
 
     if (m_settings->startMinimized) {
         if (m_settings->showSystrayIcon && m_settings->minimizeToSystray)
@@ -107,6 +118,11 @@ Application *Application::instance()
     return m_instance;
 }
 
+WidgetUi::MainWindow *Application::mainWindow() const
+{
+    return m_mainWindow;
+}
+
 QNetworkAccessManager *Application::networkManager() const
 {
     return m_networkManager;
@@ -120,6 +136,47 @@ Settings *Application::settings() const
 Registry::DocsetRegistry *Application::docsetRegistry()
 {
     return m_docsetRegistry;
+}
+
+FileManager *Application::fileManager() const
+{
+    return m_fileManager;
+}
+
+HttpServer *Application::httpServer() const
+{
+    return m_httpServer;
+}
+
+QString Application::cacheLocation()
+{
+#ifndef PORTABLE_BUILD
+    return QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
+#else
+    return QCoreApplication::applicationDirPath() + QLatin1String("/cache");
+#endif
+}
+
+QString Application::configLocation()
+{
+#ifndef PORTABLE_BUILD
+    // TODO: Replace 'Zeal/Zeal' with 'zeal'.
+    return QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+#else
+    return QCoreApplication::applicationDirPath() + QLatin1String("/config");
+#endif
+}
+
+QVersionNumber Application::version()
+{
+    static const auto vn = QVersionNumber::fromString(QCoreApplication::applicationVersion());
+    return vn;
+}
+
+QString Application::versionString()
+{
+    static const auto v = QStringLiteral("v%1").arg(QCoreApplication::applicationVersion());
+    return v;
 }
 
 void Application::executeQuery(const Registry::SearchQuery &query, bool preventActivation)
@@ -156,7 +213,7 @@ QNetworkReply *Application::download(const QUrl &url)
 /*!
   \internal
 
-  Performs a check whether a new Zeal version is available. Setting \a quiet to true supresses
+  Performs a check whether a new Zeal version is available. Setting \a quiet to true suppresses
   error and "you are using the latest version" message boxes.
 */
 void Application::checkForUpdates(bool quiet)
@@ -181,37 +238,52 @@ void Application::checkForUpdates(bool quiet)
             return;
         }
 
-        const QJsonObject latestVersionInfo = jsonDoc.array().first().toObject();
-        const Util::Version latestVersion = latestVersionInfo[QStringLiteral("version")].toString();
-        if (latestVersion > Util::Version(QCoreApplication::applicationVersion()))
+        const QJsonObject versionInfo = jsonDoc.array().first().toObject(); // Latest is the first.
+        const auto latestVersion
+                = QVersionNumber::fromString(versionInfo[QLatin1String("version")].toString());
+        if (latestVersion > version()) {
             emit updateCheckDone(latestVersion.toString());
-        else if (!quiet)
+        } else if (!quiet) {
             emit updateCheckDone();
+        }
     });
 }
 
 void Application::applySettings()
 {
+    m_docsetRegistry->setStoragePath(m_settings->docsetPath);
+    m_docsetRegistry->setFuzzySearchEnabled(m_settings->isFuzzySearchEnabled);
+
     // HTTP Proxy Settings
     switch (m_settings->proxyType) {
-    case Core::Settings::ProxyType::None:
+    case Settings::ProxyType::None:
         QNetworkProxy::setApplicationProxy(QNetworkProxy::NoProxy);
         break;
 
-    case Core::Settings::ProxyType::System:
+    case Settings::ProxyType::System:
         QNetworkProxyFactory::setUseSystemConfiguration(true);
         break;
 
-    case Core::Settings::ProxyType::UserDefined: {
-        QNetworkProxy proxy(QNetworkProxy::HttpProxy, m_settings->proxyHost, m_settings->proxyPort);
+    case Settings::ProxyType::Http:
+    case Settings::ProxyType::Socks5: {
+        const QNetworkProxy::ProxyType type = m_settings->proxyType == Settings::ProxyType::Socks5
+                ? QNetworkProxy::Socks5Proxy
+                : QNetworkProxy::HttpProxy;
+
+        QNetworkProxy proxy(type, m_settings->proxyHost, m_settings->proxyPort);
         if (m_settings->proxyAuthenticate) {
             proxy.setUser(m_settings->proxyUserName);
             proxy.setPassword(m_settings->proxyPassword);
         }
+
         QNetworkProxy::setApplicationProxy(proxy);
+
         break;
     }
     }
+
+    // Force NM to pick up changes.
+    m_networkManager->clearAccessCache();
 }
 
 QString Application::userAgent()
@@ -221,8 +293,6 @@ QString Application::userAgent()
 
 QString Application::userAgentJson() const
 {
-    // TODO: [Qt 5.4] Remove else branch
-#if QT_VERSION >= 0x050400
     QJsonObject app = {
         {QStringLiteral("version"), QCoreApplication::applicationVersion()},
         {QStringLiteral("qt_version"), qVersion()},
@@ -243,46 +313,6 @@ QString Application::userAgentJson() const
         {QStringLiteral("app"), app},
         {QStringLiteral("os"), os}
     };
-#else
-    QJsonObject app;
-    app[QStringLiteral("version")] = QCoreApplication::applicationVersion();
-    app[QStringLiteral("qt_version")] = QString::fromLatin1(qVersion());
-    app[QStringLiteral("install_id")] = m_settings->installId;
-
-    QJsonObject os;
-
-#if defined(Q_PROCESSOR_ARM)
-    os[QStringLiteral("arch")] = QStringLiteral("arm");
-#elif defined(Q_PROCESSOR_X86_32)
-    os[QStringLiteral("arch")] = QStringLiteral("i386");
-#elif defined(Q_PROCESSOR_X86_64)
-    os[QStringLiteral("arch")] = QStringLiteral("x86_64");
-#else
-    os[QStringLiteral("arch")] = QStringLiteral("unknown");
-#endif // Q_PROCESSOR_*
-
-    os[QStringLiteral("name")] = QStringLiteral("unknown");
-    os[QStringLiteral("product_type")] = QStringLiteral("unknown");
-    os[QStringLiteral("product_version")] = QStringLiteral("unknown");
-
-#if defined(Q_OS_LINUX)
-    os[QStringLiteral("kernel_type")] = QStringLiteral("linux");
-#elif defined(Q_OS_WIN)
-    os[QStringLiteral("kernel_type")] = QStringLiteral("windows");
-#elif defined(Q_OS_OSX)
-    os[QStringLiteral("kernel_type")] = QStringLiteral("osx");
-#else
-    os[QStringLiteral("kernel_type")] = QStringLiteral("unknown");
-#endif // Q_OS_*
-
-    os[QStringLiteral("kernel_version")] = QStringLiteral("unknown");
-    os[QStringLiteral("locale")] = QLocale::system().name();
-
-    QJsonObject ua;
-    ua[QStringLiteral("app")] = app;
-    ua[QStringLiteral("os")] = os;
-
-#endif // QT_VERSION >= 0x050400
 
     return QString::fromUtf8(QJsonDocument(ua).toJson(QJsonDocument::Compact));
 }

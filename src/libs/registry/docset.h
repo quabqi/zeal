@@ -21,12 +21,13 @@
 **
 ****************************************************************************/
 
-#ifndef DOCSET_H
-#define DOCSET_H
+#ifndef ZEAL_REGISTRY_DOCSET_H
+#define ZEAL_REGISTRY_DOCSET_H
 
 #include <QIcon>
 #include <QMap>
 #include <QMetaObject>
+#include <QMultiMap>
 #include <QUrl>
 
 namespace Zeal {
@@ -37,14 +38,15 @@ class SQLiteDatabase;
 
 namespace Registry {
 
-struct CancellationToken;
+class CancellationToken;
 struct SearchResult;
 
-class Docset
+class Docset final
 {
+    Q_DISABLE_COPY(Docset)
 public:
-    explicit Docset(const QString &path);
-    ~Docset();
+    explicit Docset(QString path);
+    virtual ~Docset();
 
     bool isValid() const;
 
@@ -53,7 +55,8 @@ public:
     QStringList keywords() const;
 
     QString version() const;
-    QString revision() const;
+    int revision() const;
+    QString feedUrl() const;
 
     QString path() const;
     QString documentPath() const;
@@ -64,13 +67,24 @@ public:
     QMap<QString, int> symbolCounts() const;
     int symbolCount(const QString &symbolType) const;
 
-    const QMap<QString, QUrl> &symbols(const QString &symbolType) const;
+    const QMultiMap<QString, QUrl> &symbols(const QString &symbolType) const;
 
     QList<SearchResult> search(const QString &query, const CancellationToken &token) const;
     QList<SearchResult> relatedLinks(const QUrl &url) const;
 
+    // FIXME: This a temporary solution to create URL on demand.
+    QUrl searchResultUrl(const SearchResult &result) const;
+
     // FIXME: This is an ugly workaround before we have a proper docset sources implementation
     bool hasUpdate = false;
+
+    QUrl baseUrl() const;
+    void setBaseUrl(const QUrl &baseUrl);
+
+    bool isFuzzySearchEnabled() const;
+    void setFuzzySearchEnabled(bool enabled);
+
+    bool isJavaScriptEnabled() const;
 
 private:
     enum class Type {
@@ -84,6 +98,7 @@ private:
     void loadSymbols(const QString &symbolType) const;
     void loadSymbols(const QString &symbolType, const QString &symbolString) const;
     void createIndex();
+    void createView();
     QUrl createPageUrl(const QString &path, const QString &fragment = QString()) const;
 
     static QString parseSymbolType(const QString &str);
@@ -92,20 +107,27 @@ private:
     QString m_title;
     QStringList m_keywords;
     QString m_version;
-    QString m_revision;
+    int m_revision = 0;
+    QString m_feedUrl;
     Docset::Type m_type = Type::Invalid;
     QString m_path;
     QIcon m_icon;
 
     QUrl m_indexFileUrl;
+    QString m_indexFilePath;
 
-    QMap<QString, QString> m_symbolStrings;
+    QMultiMap<QString, QString> m_symbolStrings;
     QMap<QString, int> m_symbolCounts;
-    mutable QMap<QString, QMap<QString, QUrl>> m_symbols;
+    mutable QMap<QString, QMultiMap<QString, QUrl>> m_symbols;
     Util::SQLiteDatabase *m_db = nullptr;
+
+    bool m_isFuzzySearchEnabled = false;
+    bool m_isJavaScriptEnabled = false;
+
+    QUrl m_baseUrl;
 };
 
 } // namespace Registry
 } // namespace Zeal
 
-#endif // DOCSET_H
+#endif // ZEAL_REGISTRY_DOCSET_H

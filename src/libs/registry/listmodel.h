@@ -21,11 +21,12 @@
 **
 ****************************************************************************/
 
-#ifndef LISTMODEL_H
-#define LISTMODEL_H
+#ifndef ZEAL_REGISTRY_LISTMODEL_H
+#define ZEAL_REGISTRY_LISTMODEL_H
+
+#include <util/caseinsensitivemap.h>
 
 #include <QAbstractItemModel>
-#include <QMap>
 
 namespace Zeal {
 namespace Registry {
@@ -33,14 +34,16 @@ namespace Registry {
 class Docset;
 class DocsetRegistry;
 
-class ListModel : public QAbstractItemModel
+class ListModel final : public QAbstractItemModel
 {
     Q_OBJECT
+    Q_DISABLE_COPY(ListModel)
 public:
-    explicit ListModel(DocsetRegistry *docsetRegistry, QObject *parent = nullptr);
     ~ListModel() override;
 
-    QVariant data(const QModelIndex &index, int role) const override;
+    QVariant headerData(int section, Qt::Orientation orientation, int role = Qt::DisplayRole) const override;
+
+    QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
     QModelIndex index(int row, int column, const QModelIndex &parent) const override;
     QModelIndex parent(const QModelIndex &child) const override;
     int columnCount(const QModelIndex &parent) const override;
@@ -51,35 +54,41 @@ private slots:
     void removeDocset(const QString &name);
 
 private:
-    enum Level {
-        RootLevel,
-        DocsetLevel,
-        GroupLevel,
-        SymbolLevel
+    friend class DocsetRegistry;
+
+    enum class IndexLevel {
+        Root,
+        Docset,
+        Group,
+        Symbol
     };
 
+    explicit ListModel(DocsetRegistry *docsetRegistry);
+
     inline static QString pluralize(const QString &s);
-    inline static Level indexLevel(const QModelIndex &index);
+    inline static IndexLevel indexLevel(const QModelIndex &index);
 
     DocsetRegistry *m_docsetRegistry = nullptr;
 
     struct DocsetItem;
     struct GroupItem {
-        const Level level = Level::GroupLevel;
+        const IndexLevel level = IndexLevel::Group;
         DocsetItem *docsetItem = nullptr;
         QString symbolType;
     };
 
     struct DocsetItem {
-        const Level level = Level::DocsetLevel;
+        const IndexLevel level = IndexLevel::Docset;
         Docset *docset = nullptr;
         QList<GroupItem *> groups;
     };
 
-    QMap<QString, DocsetItem *> m_docsetItems;
+    inline DocsetItem *itemInRow(int row) const;
+
+    Util::CaseInsensitiveMap<DocsetItem *> m_docsetItems;
 };
 
 } // namespace Registry
 } // namespace Zeal
 
-#endif // LISTMODEL_H
+#endif // ZEAL_REGISTRY_LISTMODEL_H

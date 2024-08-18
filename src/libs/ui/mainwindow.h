@@ -21,31 +21,21 @@
 **
 ****************************************************************************/
 
-#ifndef MAINWINDOW_H
-#define MAINWINDOW_H
-
-#include <registry/searchquery.h>
-#include <registry/cancellationtoken.h>
+#ifndef ZEAL_WIDGETUI_MAINWINDOW_H
+#define ZEAL_WIDGETUI_MAINWINDOW_H
 
 #include <QMainWindow>
 
-#ifdef USE_APPINDICATOR
-struct _AppIndicator;
-struct _GtkWidget;
-#endif
-
 class QxtGlobalShortcut;
 
-class QModelIndex;
 class QSystemTrayIcon;
 class QTabBar;
-class QTimer;
-
-namespace Ui {
-class MainWindow;
-} // namespace Ui
 
 namespace Zeal {
+
+namespace Browser {
+class WebBridge;
+} // namespace Browser
 
 namespace Core {
 class Application;
@@ -53,26 +43,34 @@ class Settings;
 } // namespace Core
 
 namespace Registry {
-class ListModel;
+class SearchQuery;
 } //namespace Registry
 
-} // namespace Zeal
+namespace WidgetUi {
 
-struct TabState;
+namespace Ui {
+class MainWindow;
+} // namespace Ui
+
+class BrowserTab;
+class SidebarViewProvider;
 
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
 public:
-    explicit MainWindow(Zeal::Core::Application *app, QWidget *parent = nullptr);
+    explicit MainWindow(Core::Application *app, QWidget *parent = nullptr);
     ~MainWindow() override;
 
-    void search(const Zeal::Registry::SearchQuery &query);
+    void search(const Registry::SearchQuery &query);
     void bringToFront();
-    void createTab(int index = -1);
+    BrowserTab *createTab();
 
 public slots:
     void toggleWindow();
+
+signals:
+    void currentTabChanged();
 
 protected:
     void changeEvent(QEvent *event) override;
@@ -82,56 +80,42 @@ protected:
 
 private slots:
     void applySettings();
-    void openDocset(const QModelIndex &index);
-    void queryCompleted();
     void closeTab(int index = -1);
+    void moveTab(int from, int to);
     void duplicateTab(int index);
 
 private:
-    void syncTreeView();
-    void syncToc();
-    void setupSearchBoxCompletions();
     void setupTabBar();
 
-    TabState *currentTabState() const;
+    void addTab(BrowserTab *tab, int index = -1);
+    BrowserTab *currentTab() const;
+    BrowserTab *tabAt(int index) const;
 
-    QString docsetName(const QUrl &url) const;
-    QIcon docsetIcon(const QString &docsetName) const;
-
-#ifdef USE_APPINDICATOR
-    void detectAppIndicatorSupport();
-#endif
     void createTrayIcon();
     void removeTrayIcon();
 
-    QList<TabState *> m_tabStates;
+    void syncTabState(BrowserTab *tab);
 
     Ui::MainWindow *ui = nullptr;
-    Zeal::Core::Application *m_application = nullptr;
-    Zeal::Core::Settings *m_settings = nullptr;
-    Zeal::Registry::ListModel *m_zealListModel = nullptr;
+    Core::Application *m_application = nullptr;
+    Core::Settings *m_settings = nullptr;
+
+    Browser::WebBridge *m_webBridge = nullptr;
 
     QMenu *m_backMenu = nullptr;
     QMenu *m_forwardMenu = nullptr;
-
-    Zeal::Registry::CancellationToken m_cancelSearch;
 
     QxtGlobalShortcut *m_globalShortcut = nullptr;
 
     QTabBar *m_tabBar = nullptr;
 
+    friend class SidebarViewProvider;
+    SidebarViewProvider *m_sbViewProvider = nullptr;
+
     QSystemTrayIcon *m_trayIcon = nullptr;
-
-    QTimer *m_openDocsetTimer = nullptr;
-
-#ifdef USE_APPINDICATOR
-    bool m_useAppIndicator = false;
-    _AppIndicator *m_appIndicator = nullptr;
-    _GtkWidget *m_appIndicatorMenu = nullptr;
-    _GtkWidget *m_appIndicatorQuitMenuItem = nullptr;
-    _GtkWidget *m_appIndicatorShowHideMenuItem = nullptr;
-    _GtkWidget *m_appIndicatorMenuSeparator = nullptr;
-#endif
 };
 
-#endif // MAINWINDOW_H
+} // namespace WidgetUi
+} // namespace Zeal
+
+#endif // ZEAL_WIDGETUI_MAINWINDOW_H

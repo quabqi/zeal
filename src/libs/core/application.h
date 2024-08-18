@@ -20,16 +20,15 @@
 **
 ****************************************************************************/
 
-#ifndef APPLICATION_H
-#define APPLICATION_H
+#ifndef ZEAL_CORE_APPLICATION_H
+#define ZEAL_CORE_APPLICATION_H
 
 #include <QObject>
+#include <QVersionNumber>
 
 class QNetworkAccessManager;
 class QNetworkReply;
 class QThread;
-
-class MainWindow;
 
 namespace Zeal {
 
@@ -38,24 +37,40 @@ class DocsetRegistry;
 class SearchQuery;
 } // namespace Registry
 
+namespace WidgetUi {
+class MainWindow;
+} // namespace WidgetUi
+
 namespace Core {
 
 class Extractor;
+class FileManager;
+class HttpServer;
 class Settings;
 
-class Application : public QObject
+class Application final : public QObject
 {
     Q_OBJECT
+    Q_DISABLE_COPY(Application)
 public:
     explicit Application(QObject *parent = nullptr);
     ~Application() override;
 
     static Application *instance();
 
+    WidgetUi::MainWindow *mainWindow() const;
+
     QNetworkAccessManager *networkManager() const;
     Settings *settings() const;
 
     Registry::DocsetRegistry *docsetRegistry();
+    FileManager *fileManager() const;
+    HttpServer *httpServer() const;
+
+    static QString cacheLocation();
+    static QString configLocation();
+    static QVersionNumber version();
+    static QString versionString();
 
 public slots:
     void executeQuery(const Registry::SearchQuery &query, bool preventActivation);
@@ -83,15 +98,18 @@ private:
 
     QNetworkAccessManager *m_networkManager = nullptr;
 
+    FileManager *m_fileManager = nullptr;
+    HttpServer *m_httpServer = nullptr;
+
     QThread *m_extractorThread = nullptr;
     Extractor *m_extractor = nullptr;
 
     Registry::DocsetRegistry *m_docsetRegistry = nullptr;
 
-    MainWindow *m_mainWindow = nullptr;
+    WidgetUi::MainWindow *m_mainWindow = nullptr;
 };
 
 } // namespace Core
 } // namespace Zeal
 
-#endif // APPLICATION_H
+#endif // ZEAL_CORE_APPLICATION_H

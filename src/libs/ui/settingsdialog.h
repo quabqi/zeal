@@ -21,39 +21,40 @@
 **
 ****************************************************************************/
 
-#ifndef SETTINGSDIALOG_H
-#define SETTINGSDIALOG_H
+#ifndef ZEAL_WIDGETUI_SETTINGSDIALOG_H
+#define ZEAL_WIDGETUI_SETTINGSDIALOG_H
 
 #include <QDialog>
 
+namespace Zeal {
+namespace WidgetUi {
+
 namespace Ui {
 class SettingsDialog;
-}
-
-namespace Zeal {
-
-namespace Core {
-class Application;
-}
+} // namespace Ui
 
 class SettingsDialog : public QDialog
 {
     Q_OBJECT
 public:
-    explicit SettingsDialog(Core::Application *app, QWidget *parent = nullptr);
+    explicit SettingsDialog(QWidget *parent = nullptr);
     ~SettingsDialog() override;
 
-private slots:
-    void on_storageButton_clicked();
+public slots:
+    void chooseCustomCssFile();
+    void chooseDocsetStoragePath();
+
+private:
+    void loadSettings();
+    void saveSettings();
 
 private:
     Ui::SettingsDialog *ui = nullptr;
-    Core::Application *m_application = nullptr;
 
-    void loadSettings();
-    void saveSettings();
+    friend class Ui::SettingsDialog;
 };
 
+} // namespace WidgetUi
 } // namespace Zeal
 
-#endif // SETTINGSDIALOG_H
+#endif // ZEAL_WIDGETUI_SETTINGSDIALOG_H

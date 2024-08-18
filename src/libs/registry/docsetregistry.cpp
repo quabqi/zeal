@@ -23,16 +23,21 @@
 
 #include "docsetregistry.h"
 
-#include "cancellationtoken.h"
+#include "docset.h"
+#include "listmodel.h"
 #include "searchquery.h"
 #include "searchresult.h"
+
+#include <core/application.h>
+#include <core/httpserver.h>
 
 #include <QDir>
 #include <QThread>
 
-#include <QtConcurrent/QtConcurrent>
+#include <QtConcurrent>
 
 #include <functional>
+#include <future>
 
 using namespace Zeal::Registry;
 
@@ -41,12 +46,12 @@ void MergeQueryResults(QList<SearchResult> &finalResult, const QList<SearchResul
     finalResult << partial;
 }
 
-DocsetRegistry::DocsetRegistry(QObject *parent) :
-    QObject(parent),
-    m_thread(new QThread(this))
+DocsetRegistry::DocsetRegistry(QObject *parent)
+    : QObject(parent)
+    , m_model(new ListModel(this))
+    , m_thread(new QThread(this))
 {
     // Register for use in signal connections.
-    qRegisterMetaType<CancellationToken>("CancellationToken");
     qRegisterMetaType<QList<SearchResult>>("QList<SearchResult>");
 
     // FIXME: Only search should be performed in a separate thread
@@ -61,12 +66,44 @@ DocsetRegistry::~DocsetRegistry()
     qDeleteAll(m_docsets);
 }
 
-void DocsetRegistry::init(const QString &path)
+QAbstractItemModel *DocsetRegistry::model() const
 {
-    for (const QString &name : m_docsets.keys())
-        remove(name);
+    return m_model;
+}
 
+QString DocsetRegistry::storagePath() const
+{
+    return m_storagePath;
+}
+
+void DocsetRegistry::setStoragePath(const QString &path)
+{
+    if (path == m_storagePath) {
+        return;
+    }
+
+    m_storagePath = path;
+
+    unloadAllDocsets();
     addDocsetsFromFolder(path);
+}
+
+bool DocsetRegistry::isFuzzySearchEnabled() const
+{
+    return m_isFuzzySearchEnabled;
+}
+
+void DocsetRegistry::setFuzzySearchEnabled(bool enabled)
+{
+    if (enabled == m_isFuzzySearchEnabled) {
+        return;
+    }
+
+    m_isFuzzySearchEnabled = enabled;
+
+    for (Docset *docset : std::as_const(m_docsets)) {
+        docset->setFuzzySearchEnabled(enabled);
+    }
 }
 
 int DocsetRegistry::count() const
@@ -84,11 +121,59 @@ QStringList DocsetRegistry::names() const
     return m_docsets.keys();
 }
 
-void DocsetRegistry::remove(const QString &name)
+void DocsetRegistry::loadDocset(const QString &path)
 {
-    emit docsetAboutToBeRemoved(name);
+    std::future<Docset *> f = std::async(std::launch::async, [path](){
+        return new Docset(path);
+    });
+
+    f.wait();
+    Docset *docset = f.get();
+    // TODO: Emit error
+    if (!docset->isValid()) {
+        qWarning("Could not load docset from '%s'. Reinstall the docset.",
+                 qPrintable(docset->path()));
+        delete docset;
+        return;
+    }
+
+    docset->setFuzzySearchEnabled(m_isFuzzySearchEnabled);
+
+    const QString name = docset->name();
+    if (m_docsets.contains(name)) {
+        unloadDocset(name);
+    }
+
+    // Setup HTTP mount.
+    QUrl url = Core::Application::instance()->httpServer()->mount(name, docset->documentPath());
+    if (url.isEmpty()) {
+        qWarning("Could not enable docset from '%s'. Reinstall the docset.",
+                 qPrintable(docset->path()));
+        delete docset;
+        return;
+    }
+
+    docset->setBaseUrl(url);
+
+    m_docsets[name] = docset;
+
+    emit docsetLoaded(name);
+}
+
+void DocsetRegistry::unloadDocset(const QString &name)
+{
+    emit docsetAboutToBeUnloaded(name);
+    Core::Application::instance()->httpServer()->unmount(name);
     delete m_docsets.take(name);
-    emit docsetRemoved(name);
+    emit docsetUnloaded(name);
+}
+
+void DocsetRegistry::unloadAllDocsets()
+{
+    const auto keys = m_docsets.keys();
+    for (const QString &name : keys) {
+        unloadDocset(name);
+    }
 }
 
 Docset *DocsetRegistry::docset(const QString &name) const
@@ -100,7 +185,20 @@ Docset *DocsetRegistry::docset(int index) const
 {
     if (index < 0 || index >= m_docsets.size())
         return nullptr;
-    return (m_docsets.cbegin() + index).value();
+
+    auto it = m_docsets.cbegin();
+    std::advance(it, index);
+    return *it;
+}
+
+Docset *DocsetRegistry::docsetForUrl(const QUrl &url)
+{
+    for (Docset *docset : std::as_const(m_docsets)) {
+        if (docset->baseUrl().isParentOf(url))
+            return docset;
+    }
+
+    return nullptr;
 }
 
 QList<Docset *> DocsetRegistry::docsets() const
@@ -108,45 +206,27 @@ QList<Docset *> DocsetRegistry::docsets() const
     return m_docsets.values();
 }
 
-void DocsetRegistry::addDocset(const QString &path)
+void DocsetRegistry::search(const QString &query)
 {
-    QMetaObject::invokeMethod(this, "_addDocset", Qt::BlockingQueuedConnection,
-                              Q_ARG(QString, path));
-}
+    m_cancellationToken.cancel();
 
-void DocsetRegistry::_addDocset(const QString &path)
-{
-    Docset *docset = new Docset(path);
-
-    // TODO: Emit error
-    if (!docset->isValid()) {
-        qWarning("Could not load docset from '%s'. Please reinstall the docset.", qPrintable(path));
-        delete docset;
+    if (query.isEmpty()) {
+        emit searchCompleted({});
         return;
     }
 
-    const QString name = docset->name();
-
-    if (m_docsets.contains(name))
-        remove(name);
-
-    m_docsets[name] = docset;
-    emit docsetAdded(name);
+    QMetaObject::invokeMethod(this, "_runQuery", Qt::QueuedConnection, Q_ARG(QString, query));
 }
 
-void DocsetRegistry::search(const QString &query, const CancellationToken &token)
+void DocsetRegistry::_runQuery(const QString &query)
 {
-    QMetaObject::invokeMethod(this, "_runQuery", Qt::QueuedConnection,
-                              Q_ARG(QString, query), Q_ARG(CancellationToken, token));
-}
+    m_cancellationToken.reset();
 
-void DocsetRegistry::_runQuery(const QString &query, const CancellationToken &token)
-{
     QList<Docset *> enabledDocsets;
 
     const SearchQuery searchQuery = SearchQuery::fromString(query);
     if (searchQuery.hasKeywords()) {
-        for (Docset *docset : docsets()) {
+        for (Docset *docset : std::as_const(m_docsets)) {
             if (searchQuery.hasKeywords(docset->keywords()))
                 enabledDocsets << docset;
         }
@@ -158,29 +238,31 @@ void DocsetRegistry::_runQuery(const QString &query, const CancellationToken &to
             = QtConcurrent::mappedReduced(enabledDocsets,
                                           std::bind(&Docset::search,
                                                     std::placeholders::_1,
-                                                    searchQuery.query(), token),
+                                                    searchQuery.query(),
+                                                    std::ref(m_cancellationToken)),
                                           &MergeQueryResults);
     QList<SearchResult> results = queryResultsFuture.result();
 
-    if (token.isCanceled())
+    if (m_cancellationToken.isCanceled())
         return;
 
     std::sort(results.begin(), results.end());
 
-    if (token.isCanceled())
+    if (m_cancellationToken.isCanceled())
         return;
 
-    emit queryCompleted(results);
+    emit searchCompleted(results);
 }
 
 // Recursively finds and adds all docsets in a given directory.
 void DocsetRegistry::addDocsetsFromFolder(const QString &path)
 {
     const QDir dir(path);
-    for (const QFileInfo &subdir : dir.entryInfoList(QDir::NoDotAndDotDot | QDir::AllDirs)) {
+    const auto subDirectories = dir.entryInfoList(QDir::NoDotAndDotDot | QDir::AllDirs);
+    for (const QFileInfo &subdir : subDirectories) {
         if (subdir.suffix() == QLatin1String("docset"))
-            addDocset(subdir.absoluteFilePath());
+            loadDocset(subdir.filePath());
         else
-            addDocsetsFromFolder(subdir.absoluteFilePath());
+            addDocsetsFromFolder(subdir.filePath());
     }
 }

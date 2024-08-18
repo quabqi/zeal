@@ -34,15 +34,20 @@ namespace Util {
 
 class SQLiteDatabase
 {
+    Q_DISABLE_COPY(SQLiteDatabase)
 public:
     explicit SQLiteDatabase(const QString &path);
     virtual ~SQLiteDatabase();
 
     bool isOpen() const;
-    QStringList tables();
 
-    bool execute(const QString &queryStr);
+    QStringList tables();
+    QStringList views();
+
+    bool prepare(const QString &sql);
     bool next();
+
+    bool execute(const QString &sql);
 
     QVariant value(int index) const;
 

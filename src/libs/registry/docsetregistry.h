@@ -21,63 +21,79 @@
 **
 ****************************************************************************/
 
-#ifndef DOCSETREGISTRY_H
-#define DOCSETREGISTRY_H
+#ifndef ZEAL_REGISTRY_DOCSETREGISTRY_H
+#define ZEAL_REGISTRY_DOCSETREGISTRY_H
 
-#include "docset.h"
+#include "cancellationtoken.h"
+#include "searchresult.h"
 
 #include <QMap>
+#include <QObject>
 
+class QAbstractItemModel;
 class QThread;
 
 namespace Zeal {
 namespace Registry {
 
-struct CancellationToken;
-struct SearchResult;
+class Docset;
 
-class DocsetRegistry : public QObject
+class DocsetRegistry final : public QObject
 {
     Q_OBJECT
+    Q_DISABLE_COPY(DocsetRegistry)
 public:
     explicit DocsetRegistry(QObject *parent = nullptr);
     ~DocsetRegistry() override;
 
-    void init(const QString &path);
+    QAbstractItemModel *model() const;
+
+    QString storagePath() const;
+    void setStoragePath(const QString &path);
+
+    bool isFuzzySearchEnabled() const;
+    void setFuzzySearchEnabled(bool enabled);
 
     int count() const;
     bool contains(const QString &name) const;
     QStringList names() const;
-    void remove(const QString &name);
+
+    void loadDocset(const QString &path);
+    void unloadDocset(const QString &name);
+    void unloadAllDocsets();
 
     Docset *docset(const QString &name) const;
     Docset *docset(int index) const;
+    Docset *docsetForUrl(const QUrl &url);
     QList<Docset *> docsets() const;
 
-    void search(const QString &query, const CancellationToken &token);
+    void search(const QString &query);
     const QList<SearchResult> &queryResults();
 
-public slots:
-    void addDocset(const QString &path);
-
 signals:
-    void docsetAdded(const QString &name);
-    void docsetAboutToBeRemoved(const QString &name);
-    void docsetRemoved(const QString &name);
-    void queryCompleted(const QList<SearchResult> &results);
+    void docsetLoaded(const QString &name);
+    void docsetAboutToBeUnloaded(const QString &name);
+    void docsetUnloaded(const QString &name);
+    void searchCompleted(const QList<SearchResult> &results);
 
 private slots:
-    void _addDocset(const QString &path);
-    void _runQuery(const QString &query, const CancellationToken &token);
+    void _runQuery(const QString &query);
 
 private:
     void addDocsetsFromFolder(const QString &path);
 
+    QAbstractItemModel *m_model = nullptr;
+
+    QString m_storagePath;
+    bool m_isFuzzySearchEnabled = false;
+
     QThread *m_thread = nullptr;
     QMap<QString, Docset *> m_docsets;
+
+    CancellationToken m_cancellationToken;
 };
 
 } // namespace Registry
 } // namespace Zeal
 
-#endif // DOCSETREGISTRY_H
+#endif // ZEAL_REGISTRY_DOCSETREGISTRY_H

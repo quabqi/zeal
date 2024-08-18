@@ -26,16 +26,22 @@
 #include <QEvent>
 #include <QKeyEvent>
 
-ShortcutEdit::ShortcutEdit(QWidget *parent) :
-    ShortcutEdit(QString(), parent)
+using namespace Zeal::WidgetUi;
+
+ShortcutEdit::ShortcutEdit(QWidget *parent)
+    : ShortcutEdit(QString(), parent)
 {
 }
 
-ShortcutEdit::ShortcutEdit(const QString &text, QWidget *parent) :
-    QLineEdit(text, parent)
+ShortcutEdit::ShortcutEdit(const QString &text, QWidget *parent)
+    : QLineEdit(text, parent)
 {
     connect(this, &QLineEdit::textChanged, [this](const QString &text) {
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
         m_key = QKeySequence(text, QKeySequence::NativeText)[0];
+#else
+        m_key = QKeySequence(text, QKeySequence::NativeText)[0].toCombined();
+#endif
     });
 }
 
@@ -43,7 +49,7 @@ bool ShortcutEdit::event(QEvent *event)
 {
     switch (event->type()) {
     case QEvent::KeyPress: {
-        QKeyEvent *keyEvent = static_cast<QKeyEvent *>(event);
+        auto keyEvent = static_cast<QKeyEvent *>(event);
         switch (keyEvent->key()) {
         case Qt::Key_Alt:
         case Qt::Key_Control:
@@ -55,9 +61,10 @@ bool ShortcutEdit::event(QEvent *event)
             m_key |= translateModifiers(keyEvent->modifiers(), keyEvent->text());
             setText(keySequence().toString(QKeySequence::NativeText));
         }
+
+        return true;
     }
     case QEvent::ShortcutOverride:
-        event->accept();
     case QEvent::KeyRelease:
     case QEvent::Shortcut:
         return true;

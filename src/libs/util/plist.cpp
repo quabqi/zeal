@@ -27,11 +27,6 @@
 
 using namespace Zeal::Util;
 
-Plist::Plist() :
-    QHash<QString, QVariant>()
-{
-}
-
 bool Plist::read(const QString &fileName)
 {
     QScopedPointer<QFile> file(new QFile(fileName));
@@ -45,7 +40,7 @@ bool Plist::read(const QString &fileName)
 
     while (!xml.atEnd()) {
         const QXmlStreamReader::TokenType token = xml.readNext();
-        if (token == QXmlStreamReader::StartDocument || token != QXmlStreamReader::StartElement)
+        if (token != QXmlStreamReader::StartElement)
             continue;
 
         if (xml.name() != QLatin1String("key"))

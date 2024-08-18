@@ -22,6 +22,9 @@
 
 #include "networkaccessmanager.h"
 
+#include "application.h"
+#include "httpserver.h"
+
 #include <QNetworkRequest>
 
 using namespace Zeal::Core;
@@ -31,14 +34,46 @@ NetworkAccessManager::NetworkAccessManager(QObject *parent)
 {
 }
 
-QNetworkReply *NetworkAccessManager::createRequest(QNetworkAccessManager::Operation op,
-                                             const QNetworkRequest &request,
-                                             QIODevice *outgoingData)
+bool NetworkAccessManager::isLocalFile(const QUrl &url)
 {
-    // Detect URLs without schema, and prevent them from being requested on a local filesytem.
-    const QUrl url = request.url();
-    if (url.scheme() == QLatin1String("file") && !url.host().isEmpty())
-        return QNetworkAccessManager::createRequest(GetOperation, QNetworkRequest(), outgoingData);
+    return url.isLocalFile() || url.scheme() == QLatin1String("qrc");
+}
 
-    return QNetworkAccessManager::createRequest(op, request, outgoingData);
+bool NetworkAccessManager::isLocalUrl(const QUrl &url)
+{
+    if (isLocalFile(url)) {
+        return true;
+    }
+
+    const QUrl &baseUrl = Application::instance()->httpServer()->baseUrl();
+    if (baseUrl.isParentOf(url)) {
+        return true;
+    }
+
+    return false;
+}
+
+QNetworkReply *NetworkAccessManager::createRequest(QNetworkAccessManager::Operation op,
+                                                   const QNetworkRequest &request,
+                                                   QIODevice *outgoingData)
+{
+    QNetworkRequest overrideRequest(request);
+    overrideRequest.setAttribute(QNetworkRequest::RedirectPolicyAttribute, true);
+
+    // Forward all non-local schemaless URLs via HTTPS.
+    const QUrl url = request.url();
+    if (isLocalFile(url) && !url.host().isEmpty()) {
+        QUrl overrideUrl(url);
+        overrideUrl.setScheme(QStringLiteral("https"));
+
+        overrideRequest.setUrl(overrideUrl);
+
+        op = QNetworkAccessManager::GetOperation;
+    }
+
+    QSslConfiguration sslConfig = overrideRequest.sslConfiguration();
+    sslConfig.setCaCertificates(QSslConfiguration::systemCaCertificates());
+    overrideRequest.setSslConfiguration(sslConfig);
+
+    return QNetworkAccessManager::createRequest(op, overrideRequest, outgoingData);
 }

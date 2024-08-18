@@ -22,29 +22,29 @@
 ****************************************************************************/
 
 #include <core/application.h>
-#include <core/localserver.h>
+#include <core/applicationsingleton.h>
 #include <registry/searchquery.h>
 
 #include <QApplication>
 #include <QCommandLineParser>
+#include <QDataStream>
 #include <QDesktopServices>
 #include <QDir>
 #include <QIcon>
 #include <QMessageBox>
 #include <QTextStream>
+#include <QTimer>
 #include <QUrlQuery>
 
 #ifdef Q_OS_WIN32
 #include <QSettings>
+
+#include <Windows.h>
 #endif
 
 #include <cstdlib>
 
 using namespace Zeal;
-
-namespace {
-const char contactUrl[] = "https://go.zealdocs.org/l/contact";
-}
 
 struct CommandLineParameters
 {
@@ -59,12 +59,17 @@ struct CommandLineParameters
 
 QString stripParameterUrl(const QString &url, const QString &scheme)
 {
-    QStringRef ref = url.midRef(scheme.length() + 1);
-    if (ref.startsWith(QLatin1String("//")))
-        ref = ref.mid(2);
-    if (ref.endsWith(QLatin1Char('/')))
-        ref = ref.left(ref.length() - 1);
-    return ref.toString();
+    QString str = url.mid(scheme.length() + 1);
+
+    if (str.startsWith(QLatin1String("//"))) {
+        str = str.mid(2);
+    }
+
+    if (str.endsWith(QLatin1Char('/'))) {
+        str = str.left(str.length() - 1);
+    }
+
+    return str;
 }
 
 CommandLineParameters parseCommandLine(const QStringList &arguments)
@@ -74,9 +79,8 @@ CommandLineParameters parseCommandLine(const QStringList &arguments)
     parser.addHelpOption();
     parser.addVersionOption();
 
-    // TODO: [Qt 5.4] parser.addOption({{"f", "force"}, "Force the application run."});
-    parser.addOption(QCommandLineOption({QStringLiteral("f"), QStringLiteral("force")},
-                                        QObject::tr("Force the application run.")));
+    parser.addOption({{QStringLiteral("f"), QStringLiteral("force")},
+                      QObject::tr("Force the application run.")});
 
 #ifdef Q_OS_WIN32
     parser.addOption(QCommandLineOption({QStringLiteral("register")},
@@ -104,6 +108,7 @@ CommandLineParameters parseCommandLine(const QStringList &arguments)
     // TODO: Support dash-feed:// protocol
     const QString arg
             = QUrl::fromPercentEncoding(parser.positionalArguments().value(0).toUtf8());
+
     if (arg.startsWith(QLatin1String("dash:"))) {
         clParams.query.setQuery(stripParameterUrl(arg, QStringLiteral("dash")));
     } else if (arg.startsWith(QLatin1String("dash-plugin:"))) {
@@ -163,20 +168,36 @@ void unregisterProtocolHandlers(const QHash<QString, QString> &protocols)
     const QString regPath = QStringLiteral("HKEY_CURRENT_USER\\Software\\Classes");
     QScopedPointer<QSettings> reg(new QSettings(regPath, QSettings::NativeFormat));
 
-    for (auto it = protocols.cbegin(); it != protocols.cend(); ++it)
+    for (auto it = protocols.cbegin(); it != protocols.cend(); ++it) {
         reg->remove(it.key());
+    }
 }
 #endif
 
 int main(int argc, char *argv[])
 {
     // Do not allow Qt version lower than the app was compiled with.
-    QT_REQUIRE_VERSION(argc, argv, QT_VERSION_STR);
+    QT_REQUIRE_VERSION(argc, argv, QT_VERSION_STR)
 
     QCoreApplication::setApplicationName(QStringLiteral("Zeal"));
     QCoreApplication::setApplicationVersion(ZEAL_VERSION);
     QCoreApplication::setOrganizationDomain(QStringLiteral("zealdocs.org"));
     QCoreApplication::setOrganizationName(QStringLiteral("Zeal"));
+
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+    QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
+    QCoreApplication::setAttribute(Qt::AA_UseHighDpiPixmaps);
+#endif
+
+// Use Fusion style on Windows 10 & 11. This enables proper dark mode support.
+// See https://www.qt.io/blog/dark-mode-on-windows-11-with-qt-6.5.
+// TODO: Make style configurable, detect -style argument.
+#if defined(Q_OS_WIN) && (QT_VERSION >= QT_VERSION_CHECK(6, 5, 0))
+    const auto osName = QSysInfo::prettyProductName();
+    if (osName.startsWith("Windows 10") || osName.startsWith("Windows 11")) {
+        QApplication::setStyle("fusion");
+    }
+#endif
 
     QScopedPointer<QApplication> qapp(new QApplication(argc, argv));
 
@@ -184,72 +205,59 @@ int main(int argc, char *argv[])
 
 #ifdef Q_OS_WIN32
     const static QHash<QString, QString> protocols = {
-        {QStringLiteral("dash"), QStringLiteral("Dash Protocol")},
-        {QStringLiteral("dash-plugin"), QStringLiteral("Dash Plugin Protocol")}
+        {QStringLiteral("dash"), QStringLiteral("URL:Dash Protocol (Zeal)")},
+        {QStringLiteral("dash-plugin"), QStringLiteral("URL:Dash Plugin Protocol (Zeal)")}
     };
+
+    if (clParams.registerProtocolHandlers) {
+        registerProtocolHandlers(protocols, clParams.registerProtocolHandlers);
+        return EXIT_SUCCESS;
+    }
 
     if (clParams.unregisterProtocolHandlers) {
         unregisterProtocolHandlers(protocols);
         return EXIT_SUCCESS;
-    } else {
-        registerProtocolHandlers(protocols, clParams.registerProtocolHandlers);
-        if (clParams.registerProtocolHandlers)
-            return EXIT_SUCCESS;
     }
 #endif
 
-    // Detect already running instance and optionally send the search query to it.
-    if (!clParams.force && Core::LocalServer::sendQuery(clParams.query, clParams.preventActivation))
-        return 0;
+    QScopedPointer<Core::ApplicationSingleton> appSingleton(new Core::ApplicationSingleton());
+    if (appSingleton->isSecondary()) {
+#ifdef Q_OS_WIN32
+        ::AllowSetForegroundWindow(appSingleton->primaryPid());
+#endif
+        QByteArray ba;
+        QDataStream out(&ba, QIODevice::WriteOnly);
+        out << clParams.query << clParams.preventActivation;
+        // TODO: Check for a possible error.
+        appSingleton->sendMessage(ba);
+        return EXIT_SUCCESS;
+    }
 
     // Set application-wide window icon. All message boxes and other windows will use it by default.
+    qapp->setDesktopFileName(QStringLiteral("org.zealdocs.zeal"));
     qapp->setWindowIcon(QIcon::fromTheme(QStringLiteral("zeal"),
                                          QIcon(QStringLiteral(":/zeal.ico"))));
-
-    QScopedPointer<Core::LocalServer> localServer(new Core::LocalServer());
-    if (!localServer->start()) {
-        QScopedPointer<QMessageBox> msgBox(new QMessageBox());
-        msgBox->setWindowTitle(QStringLiteral("Zeal"));
-
-        msgBox->setIcon(QMessageBox::Warning);
-        msgBox->setText(QObject::tr("Another application instance can be still running, "
-                                    "or has crashed.<br>Make sure to start Zeal only once."));
-        msgBox->addButton(QMessageBox::Help);
-        msgBox->addButton(QMessageBox::Retry);
-        QPushButton *quitButton = msgBox->addButton(QObject::tr("&Quit"),
-                                                    QMessageBox::DestructiveRole);
-        msgBox->setDefaultButton(quitButton);
-
-        switch (msgBox->exec()) {
-            case QMessageBox::Rejected:
-                return EXIT_SUCCESS;
-            case QMessageBox::Help:
-                QDesktopServices::openUrl(QUrl(contactUrl));
-        }
-
-        msgBox->removeButton(msgBox->button(QMessageBox::Retry));
-
-        if (!localServer->start(true)) {
-            msgBox->setIcon(QMessageBox::Critical);
-            msgBox->setText(QObject::tr("Zeal is unable to start. Please report the issue "
-                                        "providing the details below."));
-            msgBox->setDetailedText(localServer->errorString());
-
-            if (msgBox->exec() == QMessageBox::Help)
-                QDesktopServices::openUrl(QUrl(contactUrl));
-
-            return EXIT_SUCCESS;
-        }
-    }
 
     QDir::setSearchPaths(QStringLiteral("typeIcon"), {QStringLiteral(":/icons/type")});
 
     QScopedPointer<Core::Application> app(new Core::Application());
-    QObject::connect(localServer.data(), &Core::LocalServer::newQuery,
-                     app.data(), &Core::Application::executeQuery);
 
-    if (!clParams.query.isEmpty())
-        Core::LocalServer::sendQuery(clParams.query, clParams.preventActivation);
+    QObject::connect(appSingleton.data(), &Core::ApplicationSingleton::messageReceived,
+                     [&app](const QByteArray &data) {
+        Registry::SearchQuery query;
+        bool preventActivation;
+
+        QDataStream in(data);
+        in >> query >> preventActivation;
+
+        app->executeQuery(query, preventActivation);
+    });
+
+    if (!clParams.query.isEmpty()) {
+        QTimer::singleShot(0, app.data(), [&app, clParams] {
+            app->executeQuery(clParams.query, clParams.preventActivation);
+        });
+    }
 
     return qapp->exec();
 }

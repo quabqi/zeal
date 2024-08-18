@@ -21,8 +21,8 @@
 **
 ****************************************************************************/
 
-#ifndef SEARCHRESULT_H
-#define SEARCHRESULT_H
+#ifndef ZEAL_REGISTRY_SEARCHRESULT_H
+#define ZEAL_REGISTRY_SEARCHRESULT_H
 
 #include <QString>
 #include <QUrl>
@@ -37,9 +37,10 @@ struct SearchResult
     QString name;
     QString type;
 
-    Docset *docset;
+    QString urlPath;
+    QString urlFragment;
 
-    QUrl url;
+    Docset *docset;
 
     int score;
 
@@ -54,4 +55,4 @@ struct SearchResult
 } // namespace Registry
 } // namespace Zeal
 
-#endif // SEARCHRESULT_H
+#endif // ZEAL_REGISTRY_SEARCHRESULT_H
